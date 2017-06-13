@@ -1,7 +1,7 @@
 import sys
 import os
 import os.path
-import socket
+import commands
 # from optparse import OptionParser
 import pandas as pd
 import numpy as np
@@ -13,11 +13,13 @@ import seaborn as sns  # makes plot background light grey with grid, no splines.
 
 from matplotlib.backends.backend_pdf import PdfPages
 
-host = socket.gethostname()
-if host == 'Lytle':
+computer_name = commands.getoutput('scutil --get ComputerName')
+if computer_name == 'Lytle':
     basedir = '/Volumes/Pegasus/ManisLab_Data3/abr_data'
-elif host == 'Tamalpais':
-    basedir = '/Users/pbmanis/Desktop/ABR_DATA'
+elif computer_name == 'Tamalpais':
+    basedir = '/Users/pbmanis/Desktop/data/ABR_DATA'
+else:
+    raise ValueError("Need valid computer name to set base path to data")
     
 #current 10 June 2017
 ABR_Datasets = {'NrCAM': "Tessa/Coate-NrCAM-ABRs/",
@@ -38,7 +40,7 @@ ABR_Datasets = {'NrCAM': "Tessa/Coate-NrCAM-ABRs/",
                  
     
 
-class Pullfiles():
+class ABR():
     """
     Read an ABR data set from the matlab program
     Plot the traces.
@@ -51,17 +53,18 @@ class Pullfiles():
         one subject.
     """
     
-    def __init__(self, datapath, mode='clicks'):
+    def __init__(self, datapath, mode='clicks', invert=True):
 
         self.datapath = datapath
+        self.invert = invert  # data flip... depends on "active" lead connection to vertex (false) or ear (true).
         files = [f for f in os.listdir(datapath) if os.path.isfile(os.path.join(datapath, f))]
         print '\n', datapath
 
         striptxt = []
         self.sample_rate = 1e-5 # standard interpolated sample rate for matlab abr program: 10 microsecnds
         self.sample_freq = 1./self.sample_rate
-        self.hpf = 200.
-        self.lpf = 3000.  # filter frequencies, Hz
+        self.hpf = 300.
+        self.lpf = 1500.  # filter frequencies, Hz
         # self.datadate = filebase[:8]
 
         for f in files:
@@ -116,38 +119,50 @@ class Pullfiles():
         """
         # get data for clicks and plot all on one plot
         A = Analyzer()
+        thrs = {}
         for i, s in enumerate(self.clickmaps.keys()):
             if select is not None:
                 if s[9:] not in select:
                     continue
-            waves = self.get_combineddata(s, self.clickmaps[s])
+            waves = self.get_combineddata(s, self.clickmaps[s])[::-1]
             t = np.linspace(0, waves.shape[1]*self.sample_rate*1000., waves.shape[1])
-            spls = self.clickmaps[s]['SPLs']
-            for j in range(len(spls))[::-1]:
-                try:
-                    a = self.color_map[spls[len(spls)-j-1]]
-                    plottarget.plot(t, 2*waves[j]*1e6+spls[len(spls)-j-1], color=self.color_map[spls[len(spls)-j-1]])
-                except:
-                    plottarget.plot(t, 2*waves[j]*1e6+spls[len(spls)-j-1], color='k')
+            spls = self.clickmaps[s]['SPLs']  # get spls
             A.analyze(t, waves)
+            thr_spl = A.threshold_spec(waves, spls, SD=3.5)
+            thrs[s] = thr_spl
+            linewidth=1.0
+            for j in range(len(spls)):
+                if spls[j] == thr_spl:
+                    plottarget.plot(t, 0*waves[j]*1e6+spls[j], color=[0.5, 0.5, 0.5, 0.4], linewidth=5)
+                try:
+                    c = self.color_map[spls[j]]
+                    plottarget.plot(t, 2*waves[j]*1e6+spls[j], color=c, linewidth=linewidth)
+                except:
+                    plottarget.plot(t, 2*waves[j]*1e6+spls[j], color='k', linewidth=linewidth)
             if IOplot is not None:
-                IOplot.plot(spls, 1e6*A.ppio[::-1], A.ppioMarker)
-                IOplot.plot(spls, 1e6*A.rms_response[::-1], A.rmsMarker)
-                IOplot.plot(spls, 1e6*A.rms_baseline[::-1], A.baselineMarker)
+                IOplot.plot(spls, 1e6*A.ppio, A.ppioMarker)
+                IOplot.plot(spls, 1e6*A.rms_response, A.rmsMarker)
+                IOplot.plot(spls, 1e6*A.rms_baseline, A.baselineMarker)
                 ax2 = IOplot.twinx()
-                ax2.plot(spls, A.psdwindow[::-1], A.psdMarker)
+                ax2.plot(spls, A.psdwindow, A.psdMarker)
                 ax2.tick_params('y', colors='r')
             if PSDplot is not None:
                 for j in range(len(spls)):
-                    PSDplot.semilogy(np.array(A.fr), np.array(A.psd[j])) # color=self.color_map[spls[::-1]])
+                    PSDplot.semilogy(np.array(A.fr), np.array(A.psd[j])) # color=self.color_map[spls])
                 PSDplot.set_ylim(1e-6, 0.01)
                 PSDplot.set_xlim(100., 2000.)
+            
         plottarget.set_xlim(0, 8.)
-        plottarget.set_ylim(10., 110.)
+        plottarget.set_ylim(10., 115.)
         datatitle = os.path.basename(os.path.normpath(self.datapath))[15:]
         datatitle = datatitle.replace('_', '\_')
         plottarget.title.set_text(datatitle)
         plottarget.title.set_size(9)
+        print""
+        for s in thrs.keys():
+            print "dataset: %s  thr=%.0f" % (s, thrs[s])
+        print ""
+        
     
     def plotTones(self, select=None, pdf=None):
         """
@@ -183,6 +198,8 @@ class Pullfiles():
         datatitle = os.path.basename(os.path.normpath(self.datapath))[15:]
         datatitle = datatitle.replace('_', '\_')
         f.suptitle(datatitle)
+        A = Analyzer()
+        thrs = {}
         for i, s in enumerate(self.tonemaps.keys()):
             if select is not None:
                 if s[9:] not in select:
@@ -191,8 +208,13 @@ class Pullfiles():
                 waves = self.get_combineddata(s, self.tonemaps[s], freq=fr)
                 t = np.linspace(0, waves.shape[1]*self.sample_rate*1000., waves.shape[1])
                 spls = self.tonemaps[s]['SPLs']
+                A.analyze(t, waves)
+                thr_spl = A.threshold_spec(waves, spls, SD=3.5)
+                thrs[s] = thr_spl
                 plottarget = axarr[freqs.index(fr)]
                 for j in range(len(spls))[::-1]:
+                    if spls[j] == thr_spl:
+                        plottarget.plot(t, 0*waves[j]*1e6+spls[j], color=[0.5, 0.5, 0.5, 0.4], linewidth=5)
                     plottarget.plot(t, 2*waves[j]*1e6+spls[j], color=self.color_map[spls[j]])
                 plottarget.set_xlim(0, 8.)
                 plottarget.set_ylim(10., 110.)
@@ -337,6 +359,8 @@ class Pullfiles():
         for i, w in enumerate(waves):
             waves[i, -1] = waves[i, -2]  # remove nan from end of waveform...
             waves[i,:] = self.filter(waves[i,:], 4, self.lpf, self.hpf, samplefreq=self.sample_freq)
+            if self.invert:
+                waves[i,:] = -waves[i,:]
         return waves
 
 
@@ -428,7 +452,14 @@ class Pullfiles():
             print "sig: %f-%f w: %f-%f" % (np.amin(signal), np.amax(signal), np.amin(w), np.amax(w))
         return(w)
 
+
 class Analyzer(object):
+    
+    
+    """
+    
+    
+    """
     def __init__(self):
         self.ppioMarker = 'gs-'
         self.rmsMarker = 'bo-'
@@ -467,13 +498,14 @@ class Analyzer(object):
         x, = np.where((tr[0] <= self.timebase) & (self.timebase < tr[1]))
         return x
         
-    def specpower(self, fr=[500., 1500.]):
+    def specpower(self, fr=[500., 1500.], win=[0, -1]):
         fs = 1./self.sample_rate
         # fig, ax = mpl.subplots(1, 1)
         psd = [None]*self.waves.shape[0]
         psdwindow = np.zeros(self.waves.shape[0])
         for i in range(self.waves.shape[0]):
-            f, psd[i] = scipy.signal.welch(1e6*self.waves[i], fs, nperseg=256, nfft=8192, scaling='density')
+            f, psd[i] = scipy.signal.welch(1e6*self.waves[i][win[0]:win[1]],
+                fs, nperseg=256, nfft=8192, scaling='density')
             frx, = np.where((f >= fr[0]) & (f <= fr[1]))
             psdwindow[i] = np.nanmean(psd[i][frx[0]:frx[-1]])
 #            ax.semilogy(f, psd[i])
@@ -485,6 +517,57 @@ class Analyzer(object):
         self.fr = f
         self.psd = psd
         self.psdwindow = psdwindow
+        return psdwindow
+
+    def thresholds(self, waves, spls, tr=[0., 8.], SD=4.0):
+        """
+        Auto threshold detection:
+        BMC Neuroscience200910:104  DOI: 10.1186/1471-2202-10-104
+        Use last 10 msec of 15 msec window for SD estimates
+        Computes SNR (max(abs(signal))/reference SD) for a group of traces
+        The reference SD is the MEDIAN SD across the intensity run.
+        Th
+        
+        """
+        refwin = self.gettimeindices([15., 25.])
+        sds = np.std(waves[:,refwin[0]:refwin[-1]], axis=1)
+        self.median_sd = np.nanmedian(sds)
+        tx = self.gettimeindices(tr)
+        self.max_wave = np.max(np.fabs(waves[:, tx[0]:tx[-1]]), axis=1)
+        thr, = np.where(self.max_wave >= self.median_sd*SD)  # find criteria threshold
+        thrx, = np.where(np.diff(thr) == 1)  # find first contiguous point (remove low threshold non-contiguous)
+        if len(thrx) > 0:
+            return spls[thr[thrx[0]]]
+        else:
+            return np.nan
+
+    def threshold_spec(self, waves, spls, tr=[0., 8.], SD=4.0):
+        """
+        Auto threshold detection:
+        BMC Neuroscience200910:104  DOI: 10.1186/1471-2202-10-104
+        Use last 10 msec of 15 msec window for SD estimates
+        Computes SNR (max(abs(signal))/reference SD) for a group of traces
+        The reference SD is the MEDIAN SD across the intensity run.
+        
+        MODIFIED version: criteria based on power spec
+        
+        """
+        refwin = self.gettimeindices([15., 25.])
+        sds = self.specpower(fr=[800., 1250.], win=[refwin[0], refwin[-1]])
+        self.median_sd = np.nanmedian(sds)
+        print 'median sds: ', self.median_sd
+        tx = self.gettimeindices(tr)
+        self.max_wave = self.specpower(fr=[800., 1250.], win=[tx[0], tx[-1]])
+        #np.max(np.fabs(waves[:, tx[0]:tx[-1]]), axis=1)
+        print self.max_wave
+        print self.median_sd
+        thr, = np.where(self.max_wave >= self.median_sd*SD)  # find criteria threshold
+        print 'thr: ', thr
+#        thrx, = np.where(np.diff(thr) == 1)  # find first contiguous point (remove low threshold non-contiguous)
+        if len(thr) > 0:
+            return spls[thr[0]]
+        else:
+            return np.nan
 
 
 class ABRWriter():
@@ -597,10 +680,10 @@ if __name__ == '__main__':
     top_directory = os.path.join(basedir, ABR_Datasets[dsname])
     
     dirs = [tdir for tdir in os.listdir(top_directory) if os.path.isdir(os.path.join(top_directory, tdir))]
-#    for dirdata in dirs:
+
     if mode == 'clicks':
-        #clicksel = [['1228'], None, None, None, None, None, None, None]
-        clicksel = [None]*len(dirs)
+        clicksel = [['0849'], None, None, None, None, None, None, None]
+        #clicksel = [None]*len(dirs)
         rowlen = 8.
         m = int(np.ceil(len(clicksel)/rowlen))
         if m == 1:
@@ -613,25 +696,25 @@ if __name__ == '__main__':
             h = 5
         f, axarr = mpl.subplots(m, n, figsize=(12, h))
         f2, axarr2 = mpl.subplots(m, n, figsize=(12, h))
-        f3, axarr3 = mpl.subplots(m, n, figsize=(12, h))
+#        f3, axarr3 = mpl.subplots(m, n, figsize=(12, h))
         if axarr.ndim > 1:
             axarr = axarr.ravel()
         fofilename = os.path.join(top_directory, 'ClickSummary.pdf')
         for k in range(len(clicksel)):
-            P = Pullfiles(os.path.join(top_directory, dirs[k]), mode)
-            P.plotClicks(select=clicksel[k], plottarget=axarr[k], IOplot=axarr2[k], PSDplot=axarr3[k])
+            P = ABR(os.path.join(top_directory, dirs[k]), mode)
+            P.plotClicks(select=clicksel[k], plottarget=axarr[k], IOplot=axarr2[k])
         mpl.savefig(fofilename)
         
     if mode == 'tones':
         # first one has issues: 1346 stops at 40dbspl for all traces
         # 1301+1327 seem to have the higher levels, but small responses; remainder have fragementary frequencies
         # 0901 has whole series (but, is it hte same mouse?)
-#        tonesel = [['0901'], ['1446', '1505'], None, None, None, None, None, None]
-        tonesel = [None]*len(dirs)
+        tonesel = [['0901'], ['1446', '1505'], None, None, None, None, None, None]
+        #tonesel = [None]*len(dirs)
         fofilename = os.path.join(top_directory, 'ToneSummary.pdf')
         with PdfPages(fofilename) as pdf:
             for k in range(len(tonesel)):
-                P = Pullfiles(os.path.join(top_directory, dirs[k]), mode)
+                P = ABR(os.path.join(top_directory, dirs[k]), mode)
                 P.plotTones(select=tonesel[k], pdf=pdf)
 
     mpl.show()
