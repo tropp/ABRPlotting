@@ -1,5 +1,7 @@
+import sys
 import os
 import os.path
+import socket
 # from optparse import OptionParser
 import pandas as pd
 import numpy as np
@@ -11,7 +13,30 @@ import seaborn as sns  # makes plot background light grey with grid, no splines.
 
 from matplotlib.backends.backend_pdf import PdfPages
 
+host = socket.gethostname()
+if host == 'Lytle':
+    basedir = '/Volumes/Pegasus/ManisLab_Data3/abr_data'
+elif host == 'Tamalpais':
+    basedir = '/Users/pbmanis/Desktop/ABR_DATA'
+    
 #current 10 June 2017
+ABR_Datasets = {'NrCAM': "Tessa/Coate-NrCAM-ABRs/",
+                 'TessaCBA': 'Tessa/CBA',
+                 'TessaCBANE': 'Tessa/CBA_NoiseExposed',
+                 'CNTNAP2X': 'Tessa/CNTNAP2',
+                 'CNTNAP2Het': 'Tessa/CNTNAP2_Het',
+                 'CNTNAP2HG': 'Tessa/CNTNAP2_Het_GP4.3',
+                 'CNTNAP2KO': 'Tessa/CNTNAP2_KO',
+                 'CNTNAP2WT': 'Tessa/CNTNAP2_WT',
+                 'GP43Norm': 'Tessa/GP4.3-Thy1-Normal',
+                 'Yong': "Yong\'s ABRs",
+                 'Jun': "JUN\'s ABRs",
+                 'Ruili': "Ruili\'s ABRs",
+                 'Eveleen': "Eveleen\'s ABRs"
+                 } 
+                 
+                 
+    
 
 class Pullfiles():
     """
@@ -26,7 +51,7 @@ class Pullfiles():
         one subject.
     """
     
-    def __init__(self, datapath):
+    def __init__(self, datapath, mode='clicks'):
 
         self.datapath = datapath
         files = [f for f in os.listdir(datapath) if os.path.isfile(os.path.join(datapath, f))]
@@ -57,13 +82,15 @@ class Pullfiles():
         self.tonemaps = {}
         for f in self.freqs.keys():
             self.tonemaps[f] = {'stimtype': 'tonepip', 'Freqs': self.freqs[f], 'SPLs': self.spls[f[:13]]}
-            print f, self.tonemaps[f]
+            if mode == 'tones':
+                print f, self.tonemaps[f]
 
         print '\nClick Intensity series: '
         self.clickmaps = {}
         for s in self.clicks.keys():
             self.clickmaps[s] = {'stimtype': 'click', 'SPLs': self.spls[s]}
-            print s, self.clickmaps[s]
+            if mode == 'clicks':
+                print s, self.clickmaps[s]
 
         # build color map where each SPL is a color (cycles over 12 levels)
         bounds = np.linspace(0, 120, 25)  # 0 to 120 db inclusive, 5 db steps
@@ -71,8 +98,8 @@ class Pullfiles():
         rgb_values = sns.color_palette("Set2", 25)
         # Map label to RGB
         self.color_map = dict(zip(color_labels, rgb_values))
-        
-    def plotClicks(self, select=None, plottarget=None):
+
+    def plotClicks(self, select=None, plottarget=None, IOplot=None, PSDplot=None):
         """
         Plot the click ABR intensity series, one column per subject, for one subject
         
@@ -88,6 +115,7 @@ class Pullfiles():
 
         """
         # get data for clicks and plot all on one plot
+        A = Analyzer()
         for i, s in enumerate(self.clickmaps.keys()):
             if select is not None:
                 if s[9:] not in select:
@@ -96,7 +124,24 @@ class Pullfiles():
             t = np.linspace(0, waves.shape[1]*self.sample_rate*1000., waves.shape[1])
             spls = self.clickmaps[s]['SPLs']
             for j in range(len(spls))[::-1]:
-                plottarget.plot(t, 2*waves[j]*1e6+spls[len(spls)-j-1], color=self.color_map[spls[len(spls)-j-1]])
+                try:
+                    a = self.color_map[spls[len(spls)-j-1]]
+                    plottarget.plot(t, 2*waves[j]*1e6+spls[len(spls)-j-1], color=self.color_map[spls[len(spls)-j-1]])
+                except:
+                    plottarget.plot(t, 2*waves[j]*1e6+spls[len(spls)-j-1], color='k')
+            A.analyze(t, waves)
+            if IOplot is not None:
+                IOplot.plot(spls, 1e6*A.ppio[::-1], A.ppioMarker)
+                IOplot.plot(spls, 1e6*A.rms_response[::-1], A.rmsMarker)
+                IOplot.plot(spls, 1e6*A.rms_baseline[::-1], A.baselineMarker)
+                ax2 = IOplot.twinx()
+                ax2.plot(spls, A.psdwindow[::-1], A.psdMarker)
+                ax2.tick_params('y', colors='r')
+            if PSDplot is not None:
+                for j in range(len(spls)):
+                    PSDplot.semilogy(np.array(A.fr), np.array(A.psd[j])) # color=self.color_map[spls[::-1]])
+                PSDplot.set_ylim(1e-6, 0.01)
+                PSDplot.set_xlim(100., 2000.)
         plottarget.set_xlim(0, 8.)
         plottarget.set_ylim(10., 110.)
         datatitle = os.path.basename(os.path.normpath(self.datapath))[15:]
@@ -209,10 +254,10 @@ class Pullfiles():
         rundict = {}
         for run in freqs:
           Freqfile = open(os.path.join(self.datapath, run+'-kHz.txt'), 'r')
-          rundict[run] = [float(khz) for khz in Freqfile]
+          
+          rundict[run] = [float(khz) for khz in Freqfile if khz[0] != '\t'] # handle old data with blank line at end
         return rundict
 
-    
     def get_combineddata(self, datasetname, dataset, freq=None):
         """
         Read the data sets and combine the p (condensation) and n
@@ -383,67 +428,67 @@ class Pullfiles():
             print "sig: %f-%f w: %f-%f" % (np.amin(signal), np.amax(signal), np.amin(w), np.amax(w))
         return(w)
 
-
-    # def combine_polarity(self, datapath, dataset):
-    #      """
-    #      Read the files associated with the dataset
-    #      add the + and - files together
-    #      return a dict with keys by intensity of the combined waveforms.
-    #
-    #
-    #      """
-    #
-    #
-    #     for ABRfreq in fl1:
-    #
-    #         if any(('-'+ABRfreq+'.' in nff for nff in nf) and (ABRfreq in pff for pff in pf)):
-    #         # nindex = nf.find(ABRfreq)
-    #         # pindex = pf.find(ABRfreq)
-    #         # if nindex != -1:
-    #             nff = [genfile for genfile in nf if ABRfreq in genfile]
-    #             print 'negative file:', nff
-    #             pff = [genfile for genfile in pf if ABRfreq in genfile]
-    #             print 'positive file:', pff
-    #             os.chdir(datapath)
-    #             negf = pd.io.parsers.read_csv(nff[0],delim_whitespace=True, lineterminator='\r',
-    #                 skip_blank_lines=True, header=0)
-    #             posf = pd.io.parsers.read_csv(pff[0],delim_whitespace=True, lineterminator='\r',
-    #                 skip_blank_lines=True, header=0)
-    #             negseries=[]
-    #             posseries=[]
-    #             for col in negf.columns:
-    #                 print col
-    #                 for i in range(len(negf)):
-    #                     negseries.append(negf[col][i])
-    #
-    #             print 'length of negf:', len(negf[col])
-    #                 #negseries.append(negf[col])
-    #             for col in posf.columns:
-    #                 for i in range(len(posf)):
-    #                     posseries.append(posf[col][i])
-    #
-    #                 #posseries.append(posf[col])
-    #
-    #             wvfmdata = [(x + y)/2 for x, y in zip(negseries, posseries)]
-    #
-    #             print 'length of wvfmdata:', len(wvfmdata)
-    #             print 'length of posf:', len(posf[col])
-    #             print 'length of posseries:', len(posseries)
-    #             print 'length of negseries:', len(negseries)
-    #             d1 = len(wvfmdata)/len(posf[col])
-    #             waves = np.reshape(wvfmdata,(d1,len(posf[col])))
-    #             twaves = waves.T
-    #
-    #             denote = 'ABR-' + ABRfreq[:-4] + '-3'
-    #
-    #             np.savetxt(denote, twaves, delimiter='\t ', newline='\r\n')
-    #         else:
-    #             print 'No file with this frequency', ABRfreq
-    #         ABRfiles.append(denote)
-    #     return ABRfiles
+class Analyzer(object):
+    def __init__(self):
+        self.ppioMarker = 'gs-'
+        self.rmsMarker = 'bo-'
+        self.psdMarker = 'r*-'
+        self.baselineMarker = 'k-'
     
+    def analyze(self, timebase, waves):
+        
+        self.sample_rate = 0.001*(timebase[1]-timebase[0])
+        self.waves = waves
+        self.timebase = timebase
+        
+        response_range = [2.5, 7] # window, in msec... 
+        baseline = [0., 2.0]
+        
+        self.ppio = self.peaktopeak(response_range)
+        self.rms_response = self.measure_rms(response_range)
+        self.rms_baseline = self.measure_rms(baseline)
+        self.specpower()
+ 
+    def peaktopeak(self, tr):
+        tx = self.gettimeindices(tr)
+        pp = np.zeros(self.waves.shape[0])
+        for i in range(self.waves.shape[0]):
+            pp[i] = np.max(self.waves[i][tx]) - np.min(self.waves[i][tx])
+        return pp
 
-    def writeABRfile(self, dataset, waves, filename, fileindex=None):
+    def measure_rms(self, tr):
+        tx = self.gettimeindices(tr)
+        rms = np.zeros(self.waves.shape[0])
+        for i in range(self.waves.shape[0]):
+            rms[i] = np.std(self.waves[i][tx])
+        return rms
+
+    def gettimeindices(self, tr):
+        x, = np.where((tr[0] <= self.timebase) & (self.timebase < tr[1]))
+        return x
+        
+    def specpower(self, fr=[500., 1500.]):
+        fs = 1./self.sample_rate
+        # fig, ax = mpl.subplots(1, 1)
+        psd = [None]*self.waves.shape[0]
+        psdwindow = np.zeros(self.waves.shape[0])
+        for i in range(self.waves.shape[0]):
+            f, psd[i] = scipy.signal.welch(1e6*self.waves[i], fs, nperseg=256, nfft=8192, scaling='density')
+            frx, = np.where((f >= fr[0]) & (f <= fr[1]))
+            psdwindow[i] = np.nanmean(psd[i][frx[0]:frx[-1]])
+#            ax.semilogy(f, psd[i])
+        # ax.set_ylim([0.1e-4, 0.1])
+        # ax.set_xlim([10., 2000.])
+        # ax.set_xlabel('F (Hz)')
+        # ax.set_ylabel('PSD (uV^2/Hz)')
+        # mpl.show()
+        self.fr = f
+        self.psd = psd
+        self.psdwindow = psdwindow
+
+
+class ABRWriter():
+    def __init__(self, dataset, waves, filename, freqs, spls, fileindex=None):
         """
         Write one ABR file for Brad Buran's analysis program, in "EPL"
         format.
@@ -458,8 +503,10 @@ class Pullfiles():
             Example: ABR-tone-0945-005460.dat
         
         """
+        self.freqs = freqs
+        self.spls = spls
         twaves = waves.T
-        abr_filename = ('ABR-{0:s}-{1:4s}'.format(dataset['stimtype'], filename[8:12])
+        abr_filename = ('ABR-{0:s}-{1:4s}'.format(dataset['stimtype'], filename[8:12]))
         if dataset['stimtype'] == 'tonepip':
              abr_filename = abr_filename + ('{0:06d}'.format(dataset['Freqs'][fileindex]))
         abr_filename = abr_filename + '.dat' # give name an extension
@@ -534,19 +581,45 @@ class Pullfiles():
 
 
 if __name__ == '__main__':
-    top_directory = "/Users/pbmanis/Desktop/data/ABR_DATA/Coats-NrCAM-ABRs/"
-    top_directory = "/Users/pbmanis/Desktop/data/ABR_DATA/CNTNAP2/"
+
+    if len(sys.argv) > 1:
+        dsname = sys.argv[1]
+        mode = sys.argv[2]
+    else:
+        print ('Missing command arguments; call: plotABRs.py datasetname [click, tone]')
+        exit(1)
+    if dsname not in ABR_Datasets.keys():
+        print ABR_Datasets.keys()
+        raise ValueError('Data set %s not found in our list of known datasets')
+    if mode not in ['tones', 'clicks']:
+        raise ValueError('Second argument must be tones or clicks')
+
+    top_directory = os.path.join(basedir, ABR_Datasets[dsname])
+    
     dirs = [tdir for tdir in os.listdir(top_directory) if os.path.isdir(os.path.join(top_directory, tdir))]
-    mode = 'tones'
 #    for dirdata in dirs:
     if mode == 'clicks':
         #clicksel = [['1228'], None, None, None, None, None, None, None]
         clicksel = [None]*len(dirs)
-        f, axarr = mpl.subplots(1, len(clicksel), figsize=(12, 5))
+        rowlen = 8.
+        m = int(np.ceil(len(clicksel)/rowlen))
+        if m == 1:
+            n = len(clicksel)
+        else:
+            n = int(rowlen)
+        if m > 1:
+            h = 4*m
+        else:
+            h = 5
+        f, axarr = mpl.subplots(m, n, figsize=(12, h))
+        f2, axarr2 = mpl.subplots(m, n, figsize=(12, h))
+        f3, axarr3 = mpl.subplots(m, n, figsize=(12, h))
+        if axarr.ndim > 1:
+            axarr = axarr.ravel()
         fofilename = os.path.join(top_directory, 'ClickSummary.pdf')
         for k in range(len(clicksel)):
-            P = Pullfiles(os.path.join(top_directory, dirs[k]))
-            P.plotClicks(select=clicksel[k], plottarget=axarr[k])
+            P = Pullfiles(os.path.join(top_directory, dirs[k]), mode)
+            P.plotClicks(select=clicksel[k], plottarget=axarr[k], IOplot=axarr2[k], PSDplot=axarr3[k])
         mpl.savefig(fofilename)
         
     if mode == 'tones':
@@ -558,7 +631,7 @@ if __name__ == '__main__':
         fofilename = os.path.join(top_directory, 'ToneSummary.pdf')
         with PdfPages(fofilename) as pdf:
             for k in range(len(tonesel)):
-                P = Pullfiles(os.path.join(top_directory, dirs[k]))
+                P = Pullfiles(os.path.join(top_directory, dirs[k]), mode)
                 P.plotTones(select=tonesel[k], pdf=pdf)
 
     mpl.show()
