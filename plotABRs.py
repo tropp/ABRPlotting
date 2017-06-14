@@ -10,6 +10,7 @@ import matplotlib.pyplot as mpl
 #import matplotlib.colors as colors
 import itertools
 import seaborn as sns  # makes plot background light grey with grid, no splines. Remove for publication plots
+from ABR_Analysis import peakdetect
 
 from matplotlib.backends.backend_pdf import PdfPages
 
@@ -102,7 +103,7 @@ class ABR():
         # Map label to RGB
         self.color_map = dict(zip(color_labels, rgb_values))
 
-    def plotClicks(self, select=None, plottarget=None, IOplot=None, PSDplot=None):
+    def plotClicks(self, select=None, plottarget=None, IOplot=None, PSDplot=None, superIOPlot=None):
         """
         Plot the click ABR intensity series, one column per subject, for one subject
         
@@ -124,13 +125,46 @@ class ABR():
             if select is not None:
                 if s[9:] not in select:
                     continue
+            print "s: ", s
+            if s[0:8] == '20170419':
+                smarker = 'go-'
+            elif s[0:8] in ['20170608', '20170609']:
+                smarker = 'bs-'
+            else:
+                smarker = 'kx-'
+            
             waves = self.get_combineddata(s, self.clickmaps[s])[::-1]
             t = np.linspace(0, waves.shape[1]*self.sample_rate*1000., waves.shape[1])
             spls = self.clickmaps[s]['SPLs']  # get spls
+            r = {}
+            n = {}
+            for j in range(waves.shape[0]):
+                r[j] = peakdetect.find_np(self.sample_freq, waves[j,:],
+                    nzc_algorithm_kw={'dev': 1},
+                    guess_algorithm_kw={'min_latency': 2.5})
+                if len(r[j]) > 0:
+                    n[j] = peakdetect.find_np(self.sample_freq, -waves[j,:],
+                        nzc_algorithm_kw={'dev': 2.5},
+                        guess_algorithm_kw={'min_latency': t[r[j][0]]})  # find negative peaks after positive peaks
+            halfspl = np.max(spls)/2.
+            latmap = []
+            spllat = []
+            for j in range(len(spls)):
+                if spls[j] > halfspl:
+                    latmap.append(t[r[j][0]]) # get latency for first value
+                    spllat.append(spls[j])
+            print spllat, latmap
+            latp = np.polyfit(spllat, latmap, 1)
+            fitline = np.polyval(latp, spls)
+            # mpl.figure()
+            # mpl.plot(spllat, latmap, 'o')
+            # mpl.plot(spls, fitline, 'g-')
+            #print r
             A.analyze(t, waves)
             thr_spl = A.threshold_spec(waves, spls, SD=3.5)
             thrs[s] = thr_spl
             linewidth=1.0
+            IO = np.zeros(len(spls))
             for j in range(len(spls)):
                 if spls[j] == thr_spl:
                     plottarget.plot(t, 0*waves[j]*1e6+spls[j], color=[0.5, 0.5, 0.5, 0.4], linewidth=5)
@@ -139,6 +173,21 @@ class ABR():
                     plottarget.plot(t, 2*waves[j]*1e6+spls[j], color=c, linewidth=linewidth)
                 except:
                     plottarget.plot(t, 2*waves[j]*1e6+spls[j], color='k', linewidth=linewidth)
+                for p in r[j]:
+                    plottarget.plot(t[p], 2*waves[j][p]*1e6+spls[j], 'ro', markersize=3.5)
+                for p in n[j]:
+                    plottarget.plot(t[p], 2*waves[j][p]*1e6+spls[j], 'bo', markersize=3.5)
+                plottarget.plot(fitline, spls, 'g-', linewidth=0.7)
+                if spls[j] >= thr_spl:
+                    IO[j] = 1.e6*(waves[j][r[j][0]] - waves[j][n[j][0]])
+                else:
+                    ti = int(fitline[j]/(self.sample_rate*1000.))
+                    print 'ti: ', ti
+                    IO[j] = 1.e6*waves[j][ti]
+            
+            if superIOPlot is not None:
+                superIOPlot.plot(spls, IO, smarker)
+
             if IOplot is not None:
                 IOplot.plot(spls, 1e6*A.ppio, A.ppioMarker)
                 IOplot.plot(spls, 1e6*A.rms_response, A.rmsMarker)
@@ -151,7 +200,6 @@ class ABR():
                     PSDplot.semilogy(np.array(A.fr), np.array(A.psd[j])) # color=self.color_map[spls])
                 PSDplot.set_ylim(1e-6, 0.01)
                 PSDplot.set_xlim(100., 2000.)
-            
         plottarget.set_xlim(0, 8.)
         plottarget.set_ylim(10., 115.)
         datatitle = os.path.basename(os.path.normpath(self.datapath))[15:]
@@ -353,7 +401,7 @@ class ABR():
                 posseries.append(posf[col][i])
         
         wvfmdata = [(x + y)/2 for x, y in zip(negseries, posseries)]
-
+#        wvfmdata = negseries  # just get one polarity
         d1 = len(wvfmdata)/len(posf[col])
         waves = np.reshape(wvfmdata,(d1,len(posf[col])))
         for i, w in enumerate(waves):
@@ -695,14 +743,15 @@ if __name__ == '__main__':
         else:
             h = 5
         f, axarr = mpl.subplots(m, n, figsize=(12, h))
-        f2, axarr2 = mpl.subplots(m, n, figsize=(12, h))
+#        f2, axarr2 = mpl.subplots(m, n, figsize=(12, h))
 #        f3, axarr3 = mpl.subplots(m, n, figsize=(12, h))
+        f4, IOax = mpl.subplots(1, 1, figsize=(6,6))
         if axarr.ndim > 1:
             axarr = axarr.ravel()
         fofilename = os.path.join(top_directory, 'ClickSummary.pdf')
         for k in range(len(clicksel)):
             P = ABR(os.path.join(top_directory, dirs[k]), mode)
-            P.plotClicks(select=clicksel[k], plottarget=axarr[k], IOplot=axarr2[k])
+            P.plotClicks(select=clicksel[k], plottarget=axarr[k], superIOPlot=IOax) # , IOplot=axarr2[k])
         mpl.savefig(fofilename)
         
     if mode == 'tones':
