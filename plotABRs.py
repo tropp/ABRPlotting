@@ -1,7 +1,9 @@
 import sys
 import os
+import re
 import os.path
 import commands
+import glob
 # from optparse import OptionParser
 import pandas as pd
 import numpy as np
@@ -10,7 +12,7 @@ import matplotlib.pyplot as mpl
 #import matplotlib.colors as colors
 import itertools
 import seaborn as sns  # makes plot background light grey with grid, no splines. Remove for publication plots
-from ABR_Analysis import peakdetect
+import peakdetect  # from Brad Buran's project
 
 from matplotlib.backends.backend_pdf import PdfPages
 
@@ -23,28 +25,36 @@ else:
     raise ValueError("Need valid computer name to set base path to data")
     
 #current 10 June 2017
-ABR_Datasets = {'NrCAM': "Tessa/Coate-NrCAM-ABRs/",
-                 'TessaCBA': 'Tessa/CBA',
-                 'TessaCBANE': 'Tessa/CBA_NoiseExposed',
-                 'CNTNAP2X': 'Tessa/CNTNAP2',
-                 'CNTNAP2Het': 'Tessa/CNTNAP2_Het',
-                 'CNTNAP2HG': 'Tessa/CNTNAP2_Het_GP4.3',
-                 'CNTNAP2KO': 'Tessa/CNTNAP2_KO',
-                 'CNTNAP2WT': 'Tessa/CNTNAP2_WT',
-                 'GP43Norm': 'Tessa/GP4.3-Thy1-Normal',
-                 'Yong': "Yong\'s ABRs",
-                 'Jun': "JUN\'s ABRs",
-                 'Ruili': "Ruili\'s ABRs",
-                 'Eveleen': "Eveleen\'s ABRs"
+# This table should be converted to an excel spreadsheet organized
+# with a worksheet for each data set, and within each worksheet, each subject's information
+# placed in a single row. Make the table pandas-readable.
+
+ABR_Datasets = {'NrCAM': {'dir': "Tessa/Coate-NrCAM-ABRs/", 'invert': True, 
+                    'clickselect: ': [['0849'], None, None, None, None, None, None, None],
+                    'toneselect': [['0901'], ['1446', '1505'], None, None, None, None, None, None],
+                    'term': '\r', 'minlat': 2.2},
+                 'TessaCBA': {'dir': 'Tessa/CBA', 'invert': True},
+                 'TessaCBANE': {'dir': 'Tessa/CBA_NoiseExposed', 'invert': True},
+                 'CNTNAP2X': {'dir': 'Tessa/CNTNAP2', 'invert': False},
+                 'CNTNAP2Het': {'dir': 'Tessa/CNTNAP2_Het', 'invert': False},
+                 'CNTNAP2HG': {'dir': 'Tessa/CNTNAP2_Het_GP4.3', 'invert': False},
+                 'CNTNAP2KO': {'dir': 'Tessa/CNTNAP2_KO', 'invert': False},
+                 'CNTNAP2WT': {'dir': 'Tessa/CNTNAP2_WT', 'invert': False},
+                 'GP43Norm': {'dir': 'Tessa/GP4.3-Thy1-Normal', 'invert': False},
+                 'Yong': {'dir': "Yong\'s ABRs", 'invert': True,
+                     'term':'\n', 'minlat': 0.6},
+                 'Jun': {'dir': "JUN\'s ABRs", 'invert': False},
+                 'Ruili': {'dir': "Ruilis ABRs", 'invert': True, 'nameselect': 'CBA',
+                     'term':'\n', 'minlat': 0.6},
+                 'Eveleen': {'dir': "Eveleen\'s ABRs", 'invert': False},
                  } 
-                 
-                 
-    
+
 
 class ABR():
     """
     Read an ABR data set from the matlab program
-    Plot the traces.
+    Provides routines for reading data, parsing data type (click tones),
+    filtering and plotting the traces.
     
     Parameters
     ----------
@@ -54,30 +64,53 @@ class ABR():
         one subject.
     """
     
-    def __init__(self, datapath, mode='clicks', invert=True):
-
-        self.datapath = datapath
-        self.invert = invert  # data flip... depends on "active" lead connection to vertex (false) or ear (true).
-        files = [f for f in os.listdir(datapath) if os.path.isfile(os.path.join(datapath, f))]
-        print '\n', datapath
-
-        striptxt = []
+    def __init__(self, datapath, mode='clicks', info={'invert': False, 'minlat': 0.75, 'term': '\r'}):
+        
+        
+        # Set some default parameters for the data and analyses
+        
         self.sample_rate = 1e-5 # standard interpolated sample rate for matlab abr program: 10 microsecnds
         self.sample_freq = 1./self.sample_rate
         self.hpf = 300.
         self.lpf = 1500.  # filter frequencies, Hz
-        # self.datadate = filebase[:8]
-
-        for f in files:
-            striptxt.append(f[16:-4])
-
+        self.clickdata = {}
+        self.tonemapdata = []
+        # build color map where each SPL is a color (cycles over 12 levels)
+        bounds = np.linspace(0, 120, 25)  # 0 to 120 db inclusive, 5 db steps
+        color_labels = np.unique(bounds)
+        rgb_values = sns.color_palette("Set2", 25)
+        # Map label to RGB
+        self.color_map = dict(zip(color_labels, rgb_values))
+        
+        self.datapath = datapath
+        self.term = info['term']
+        self.minlat = info['minlat']
+        self.invert = info['invert']  # data flip... depends on "active" lead connection to vertex (false) or ear (true).
+        
+        self.characterizeDataset()
+        
+    def characterizeDataset(self):
+        """
+        Look at the directory in datapath, and determine what datasets are present.
+        A dataset consists of at least 3 files:
+        yyyymmdd-HHMM-SPL.txt : the SPL levels in a given run, with year, month day hour and minute
+        yyyymmdd-HHMM-{n,p}-[freq].txt : hold waveform data for a series of SPL levels
+            For clicks, just click polarity - holds waveforms from the run
+            typically there will be both an n and a p file because we use alternating polarities.
+            For tones, there is also a number indicating the tone pip frequency used.
+        
+        The runs are stored in separate dictionaries for the click and tone map runs, including
+        their SPL levels (and for tone maps, frequencies).
+        
+        """
+        files = [f for f in os.listdir(self.datapath) if os.path.isfile(os.path.join(self.datapath, f))]        
         self.spls = self.getSPLs(files)
         self.freqs = self.getFreqs(files)
-        # The keys in the freqs files represent the different runs for tone maps
-        # The keys in the spl files that are not in the freqs files represent click runs
+        # A click run will consist of an SPL, n and p file, but NO additional files.
         self.clicks = {}
+        allfiles = glob.glob(self.datapath)
         for s in self.spls.keys():
-            if s[:13] not in [f[:13] for f in self.freqs.keys()]:
+            if len(glob.glob(os.path.join(self.datapath, s + '*.txt'))) == 3:
                 self.clicks[s] = self.spls[s]
 
         # inspect the directory and get a listing of all the tone and click maps
@@ -89,24 +122,42 @@ class ABR():
             if mode == 'tones':
                 print f, self.tonemaps[f]
 
-        print '\nClick Intensity series: '
+        print '\n    Click Intensity Runs: '
         self.clickmaps = {}
         for s in self.clicks.keys():
             self.clickmaps[s] = {'stimtype': 'click', 'SPLs': self.spls[s]}
             if mode == 'clicks':
-                print s, self.clickmaps[s]
+                print '    Run: %s' % s
+                print '        ', self.clickmaps[s]
 
-        # build color map where each SPL is a color (cycles over 12 levels)
-        bounds = np.linspace(0, 120, 25)  # 0 to 120 db inclusive, 5 db steps
-        color_labels = np.unique(bounds)
-        rgb_values = sns.color_palette("Set2", 25)
-        # Map label to RGB
-        self.color_map = dict(zip(color_labels, rgb_values))
+    def getClickData(self, select):
+        select = self.adjustSelection(select)
+        # get data for clicks and plot all on one plot
+        self.clickdata = {}
+        for i, s in enumerate(self.clickmaps.keys()):
+            if select is not None:
+                if s[9:] not in select:
+                    continue
+            print "s: ", s
+            if s[0:8] == '20170419':  # these should not be here... should be in excel table 
+                smarker = 'go-'
+            elif s[0:8] in ['20170608', '20170609']:
+                smarker = 'bs-'
+            else:
+                smarker = 'kx-'
+            waves = self.get_combineddata(s, self.clickmaps[s])
+            if waves is None:
+                print('Malformed data set for run %s. Continuing' % s)
+                continue
+            waves = waves[::-1]  # reverse order to match spls
+            t = np.linspace(0, waves.shape[1]*self.sample_rate*1000., waves.shape[1])
+            spls = self.clickmaps[s]['SPLs']  # get spls
+            self.clickdata[s] = {'waves': waves, 'timebase': t, 'spls': spls, 'marker': smarker}
 
-    def plotClicks(self, select=None, plottarget=None, IOplot=None, PSDplot=None, superIOPlot=None):
+    def plotClicks(self, plottarget=None, IOplot=None, PSDplot=None, superIOPlot=None):
         """
         Plot the click ABR intensity series, one column per subject, for one subject
-        
+        requires self.clickdata be populated
         Parameters
         ----------
         select : list of str (default : None)
@@ -118,51 +169,66 @@ class ABR():
             The axis to plot the data into.
 
         """
-        # get data for clicks and plot all on one plot
-        A = Analyzer()
-        thrs = {}
-        for i, s in enumerate(self.clickmaps.keys()):
-            if select is not None:
-                if s[9:] not in select:
-                    continue
-            print "s: ", s
-            if s[0:8] == '20170419':
-                smarker = 'go-'
-            elif s[0:8] in ['20170608', '20170609']:
-                smarker = 'bs-'
-            else:
-                smarker = 'kx-'
-            
-            waves = self.get_combineddata(s, self.clickmaps[s])[::-1]
-            t = np.linspace(0, waves.shape[1]*self.sample_rate*1000., waves.shape[1])
-            spls = self.clickmaps[s]['SPLs']  # get spls
+        if len(self.clickdata) == 0:
+            raise ValueError('plotClicks requires that self.clickdata be populated first')
+        
+        A = Analyzer()  # create an instance of analyzer to use here
+        
+        for s in self.clickdata.keys():
+            waves = self.clickdata[s]['waves']
+            t = self.clickdata[s]['timebase']
+            spls = self.clickdata[s]['spls']
+            thrs = {}
             r = {}
             n = {}
-            for j in range(waves.shape[0]):
+            # set minimum latency from maximal stimulus level
+            # to figure out the order, since it is not stored in the data:
+            first = np.std(waves[0,:])
+            last = np.std(waves[-1,:])
+            if first > last:
+                index = -1
+            else:
+                index = 0
+            
+            # rmax = peakdetect.find_np(self.sample_freq, waves[-1,:],
+            #     nzc_algorithm_kw={'dev': 1},
+            #     guess_algorithm_kw={'min_latency': self.minlat})
+            # min_latency = t[rmax[0]]  # latency of first + peak
+            min_latency = self.minlat
+            ml0 = min_latency
+            for j in range(waves.shape[0])[::-1]:
                 r[j] = peakdetect.find_np(self.sample_freq, waves[j,:],
                     nzc_algorithm_kw={'dev': 1},
-                    guess_algorithm_kw={'min_latency': 2.5})
+                    guess_algorithm_kw={'min_latency': min_latency})
+                min_latency = t[r[j][0]]-0.2  # new min latency is latency of peak at next higher intensity 
                 if len(r[j]) > 0:
                     n[j] = peakdetect.find_np(self.sample_freq, -waves[j,:],
-                        nzc_algorithm_kw={'dev': 2.5},
+                        nzc_algorithm_kw={'dev': 1.5},
                         guess_algorithm_kw={'min_latency': t[r[j][0]]})  # find negative peaks after positive peaks
-            halfspl = np.max(spls)/2.
-            latmap = []
-            spllat = []
-            for j in range(len(spls)):
-                if spls[j] > halfspl:
-                    latmap.append(t[r[j][0]]) # get latency for first value
-                    spllat.append(spls[j])
-            print spllat, latmap
-            latp = np.polyfit(spllat, latmap, 1)
-            fitline = np.polyval(latp, spls)
-            # mpl.figure()
-            # mpl.plot(spllat, latmap, 'o')
-            # mpl.plot(spls, fitline, 'g-')
-            #print r
             A.analyze(t, waves)
             thr_spl = A.threshold_spec(waves, spls, SD=3.5)
             thrs[s] = thr_spl
+
+            latmap = []
+            spllat = []
+            print '    thr_spl: %.1f  n>thr: %d' % (thr_spl, len(thrs))
+            # fit a line to the latencies of the first (P1) peak for all traces
+            # above threshold. The line is used to estimate the position of data
+            # for measurements below threshold.
+            # 
+            for j in range(len(spls)):
+                if spls[j] > thr_spl:
+                    latmap.append(t[r[j][0]]) # get latency for first value
+                    spllat.append(spls[j])
+            if len(spllat) > 2:
+                latp = np.polyfit(spllat, latmap, 1)
+                spls2 = spls
+                spls2[0] = spls2[0] - 5.
+                spls2[-1] = spls2[-1] + 5.
+                fitline = np.polyval(latp, spls2)
+            else:
+                fitline = []
+
             linewidth=1.0
             IO = np.zeros(len(spls))
             for j in range(len(spls)):
@@ -177,17 +243,30 @@ class ABR():
                     plottarget.plot(t[p], 2*waves[j][p]*1e6+spls[j], 'ro', markersize=3.5)
                 for p in n[j]:
                     plottarget.plot(t[p], 2*waves[j][p]*1e6+spls[j], 'bo', markersize=3.5)
-                plottarget.plot(fitline, spls, 'g-', linewidth=0.7)
+                if len(fitline) > 2:
+                    plottarget.plot(fitline, spls2, 'g-', linewidth=0.7)
+                plottarget.plot([ml0, ml0], [np.min(spls), np.max(spls)], 'r--', linewidth=0.5)
+                plottarget.plot([self.minlat, self.minlat], [np.min(spls), np.max(spls)], 'c--', linewidth=0.5)
                 if spls[j] >= thr_spl:
                     IO[j] = 1.e6*(waves[j][r[j][0]] - waves[j][n[j][0]])
                 else:
-                    ti = int(fitline[j]/(self.sample_rate*1000.))
-                    print 'ti: ', ti
-                    IO[j] = 1.e6*waves[j][ti]
+                    if len(fitline) > 2:
+                        ti = int(fitline[j]/(self.sample_rate*1000.))
+                        try:
+                            IO[j] = 1.e6*waves[j][ti]
+                        except:
+                            print 'j, ti: ', j, ti, waves.shape
             
             if superIOPlot is not None:
-                superIOPlot.plot(spls, IO, smarker)
-
+                superIOPlot.plot(spls, IO, self.clickdata[s]['marker'])
+                # print out the data for import into another plotting program
+                print '*'*20
+                print 'dataset: ', s
+                print 't\tV'
+                for i in range(len(spls)):
+                    print '%.1f\t%.3f' % (spls[i], IO[i])
+                print '*'*20
+            
             if IOplot is not None:
                 IOplot.plot(spls, 1e6*A.ppio, A.ppioMarker)
                 IOplot.plot(spls, 1e6*A.rms_response, A.rmsMarker)
@@ -202,7 +281,7 @@ class ABR():
                 PSDplot.set_xlim(100., 2000.)
         plottarget.set_xlim(0, 8.)
         plottarget.set_ylim(10., 115.)
-        datatitle = os.path.basename(os.path.normpath(self.datapath))[15:]
+        datatitle = os.path.basename(os.path.normpath(self.datapath))
         datatitle = datatitle.replace('_', '\_')
         plottarget.title.set_text(datatitle)
         plottarget.title.set_size(9)
@@ -210,28 +289,41 @@ class ABR():
         for s in thrs.keys():
             print "dataset: %s  thr=%.0f" % (s, thrs[s])
         print ""
-        
-    
-    def plotTones(self, select=None, pdf=None):
+
+    def plotTones(self, pdf=None):
         """
         Plot the tone ABR intensity series, one column per frequency, for one subject
         
         Parameters
         ----------
-        select : list of str (default : None)
-            A list of the times for the datasets to plot for each subject.
+        select : list of str or int (default : None)
+            A list of the run times for the datasets to plot for each subject.
             If None, then all detected tone ABR runs for that subject/frequency
             comtination are superimposed.
-            The list looks like [['0115'], None, None]  - for each directory in order. 
+            The list looks like [['0115'], None, None]  - for each directory in order.
+            Multiple runs can be indictated by [[115, 145], None, None] to include the 
+            0115 and 0145 runs together (overplotted) for the first file.
         
         pdf : pdfPages object
             The pdfPages object that the plot will be appended to. Results in a multipage
             pdf, one page per subject. 
 
         """
+        if len(self.tonemapdata) == 0:
+            raise ValueError('plotClicks requires that self.clickdata be populated first')
+        
+        A = Analyzer()  # create an instance of analyzer to use here
+        
+        for s in self.tonemapdata.keys():
+            waves = self.tonemapdata[s]['waves']
+            t = self.tonemapdata[s]['timebase']
+            spls = self.tonemapdata[s]['spls']
+            thrs = {}
         freqs = []
+        # convert select to make life easier 
+        # select list should have lists of strings ['0124', '0244'] or Nones...
+        select, freqs = self.adjustSelection(select, tone=True)
         for i, s in enumerate(self.tonemaps.keys()):
-            print i, s, s[9:]
             if select is not None:
                 if s[9:] not in select:
                     continue
@@ -254,6 +346,8 @@ class ABR():
                     continue
             for fr in self.tonemaps[s]['Freqs']:
                 waves = self.get_combineddata(s, self.tonemaps[s], freq=fr)
+                if waves is None:
+                    continue
                 t = np.linspace(0, waves.shape[1]*self.sample_rate*1000., waves.shape[1])
                 spls = self.tonemaps[s]['SPLs']
                 A.analyze(t, waves)
@@ -273,6 +367,25 @@ class ABR():
         if pdf is not None:
             pdf.savefig()
             mpl.close()
+
+    def adjustSelection(self, select, tone=False):
+        freqs = []
+        if select is None:
+            return select
+        for i, s in enumerate(select):
+            if s is None:
+                continue
+            if isinstance(s, int):
+                select[i] = '%04d' % s
+            if isinstance(s, str) and len(s) < 4:
+                select[i] = '%04d' % int(s)
+            if tone:
+                for f in self.tonemaps[s]['Freqs']:
+                    if f not in freqs:
+                        freqs.append(f)
+                return select, freqs
+            else:
+                return select
 
     def cleanAxes(self, axl):
         """
@@ -310,7 +423,8 @@ class ABR():
         rundict = {}
         for run in spls:
              SPLfile = open(os.path.join(self.datapath, run+'-SPL.txt'), 'r')
-             rundict[run] = [float(spl) for spl in SPLfile]
+             #print 'SPLfile: ', SPLfile
+             rundict[run] = [float(spl.strip()) for spl in SPLfile if len(spl.strip()) > 0]  # clean up whitespace etc.
         return rundict
  
     def getFreqs(self, dir):
@@ -319,13 +433,17 @@ class ABR():
         per frequency for its intensity run.
         
         """
-        # return all the tone response files in the directory.
-        freqs = [f[:-8] for f in os.listdir(self.datapath) if f[14:17] == 'kHz']
+        # return all the tone response runs in the directory. These are marked by having a 'khz'
+        # file - but the case may change with program version, so ignore the case
+        freqs = [f[:-8] for f in os.listdir(self.datapath) if re.search(f, 'kHz', re.IGNORECASE)]
         rundict = {}
         for run in freqs:
-          Freqfile = open(os.path.join(self.datapath, run+'-kHz.txt'), 'r')
+          try:
+              Freqfile = open(os.path.join(self.datapath, run+'-kHz.txt'), 'r')
+          except:
+              Freqfile = open(os.path.join(self.datapath, run+'-khz.txt'), 'r')
           
-          rundict[run] = [float(khz) for khz in Freqfile if khz[0] != '\t'] # handle old data with blank line at end
+          rundict[run] = [float(khz.strip()) for khz in Freqfile if len(khz.strip()) > 0] # handle old data with blank line at end
         return rundict
 
     def get_combineddata(self, datasetname, dataset, freq=None):
@@ -386,10 +504,12 @@ class ABR():
          
         """
         
-        posf = pd.io.parsers.read_csv(os.path.join(self.datapath, fnamepos), delim_whitespace=True, lineterminator='\r',
+        posf = pd.io.parsers.read_csv(os.path.join(self.datapath, fnamepos), delim_whitespace=True, lineterminator=self.term,
             skip_blank_lines=True, header=0)
-        negf = pd.io.parsers.read_csv(os.path.join(self.datapath, fnameneg), delim_whitespace=True, lineterminator='\r',
+        negf = pd.io.parsers.read_csv(os.path.join(self.datapath, fnameneg), delim_whitespace=True, lineterminator=self.term,
             skip_blank_lines=True, header=0)
+        if posf.shape[0] == 0 or negf.shape[0] == 0: # malformed files
+            return None
         negseries=[]
         posseries=[]
         for col in negf.columns:
@@ -402,6 +522,11 @@ class ABR():
         
         wvfmdata = [(x + y)/2 for x, y in zip(negseries, posseries)]
 #        wvfmdata = negseries  # just get one polarity
+        # print fnamepos
+        # print posf.shape
+        # print 'col: ', col
+        # print posf[col]
+        # print 'len pos col: ', len(posf[col])
         d1 = len(wvfmdata)/len(posf[col])
         waves = np.reshape(wvfmdata,(d1,len(posf[col])))
         for i, w in enumerate(waves):
@@ -456,7 +581,6 @@ class ABR():
         
     def SignalFilter(self, signal, LPF, HPF, samplefreq, debugFlag=True):
         """Filter signal within a bandpass with elliptical filter.
-
         Digitally filter a signal with an elliptical filter; handles
         bandpass filtering between two frequencies. 
 
@@ -502,10 +626,8 @@ class ABR():
 
 
 class Analyzer(object):
-    
-    
     """
-    
+    Provide general analysis functions for ABR waveforms
     
     """
     def __init__(self):
@@ -515,12 +637,24 @@ class Analyzer(object):
         self.baselineMarker = 'k-'
     
     def analyze(self, timebase, waves):
+        """
+        Main descriptive analysis. 
+        Prodides the peak-to-peak, rms, baseline and mean spectral power
+        for a set of ABR data
+        
+        Parameters
+        ----------
+        timebase : numpy array
+            Time base for an individual trace
+        waves : numpy array
+            2-d array (spls x time) of ABR waveforms
+        """
         
         self.sample_rate = 0.001*(timebase[1]-timebase[0])
         self.waves = waves
         self.timebase = timebase
         
-        response_range = [2.5, 7] # window, in msec... 
+        response_range = [2.0, 7] # window, in msec... 
         baseline = [0., 2.0]
         
         self.ppio = self.peaktopeak(response_range)
@@ -529,6 +663,18 @@ class Analyzer(object):
         self.specpower()
  
     def peaktopeak(self, tr):
+        """
+        Measure the peak-to-peak signal within the time window
+        
+        Parameters
+        ----------
+        tr : a 2 element list [start time, stop time]
+            The time window in which to take the measure
+        
+        Returns
+        -------
+        pp : a list of the rms values across the spls in a run
+        """
         tx = self.gettimeindices(tr)
         pp = np.zeros(self.waves.shape[0])
         for i in range(self.waves.shape[0]):
@@ -536,6 +682,18 @@ class Analyzer(object):
         return pp
 
     def measure_rms(self, tr):
+        """
+        Measure the rms signal within the time window
+        
+        Parameters
+        ----------
+        tr : a 2 element list [start time, stop time]
+            The time window in which to take the measure
+        
+        Returns
+        -------
+        rms : a list of the rms values across the spls in a run
+        """
         tx = self.gettimeindices(tr)
         rms = np.zeros(self.waves.shape[0])
         for i in range(self.waves.shape[0]):
@@ -543,12 +701,40 @@ class Analyzer(object):
         return rms
 
     def gettimeindices(self, tr):
+        """
+        Parameters
+        ----------
+        tr : list of 2 floats (no default)
+            the two times bracketing a window
+        
+        Returns
+        -------
+        x : the indices into the array for all points within the window. The
+            indices are bounded [t0...t1)
+        """
         x, = np.where((tr[0] <= self.timebase) & (self.timebase < tr[1]))
         return x
         
     def specpower(self, fr=[500., 1500.], win=[0, -1]):
+        """
+        Compute the average power spectrum from the current waveform set
+        over a window
+        
+        Parameters
+        ----------
+        fr : list of floats (default: [500., 1500.])
+            frequency window for computation, in Hz
+        win : list of ints (default: [0, -1])
+            indices for the temporal window. Defaults are the 
+            entire trace. Use result gettimeindices to get
+            the index list
+        
+        Returns
+        -------
+        psdwindow : the power spectrum measured in the window across
+            all spls in a run.
+        """
         fs = 1./self.sample_rate
-        # fig, ax = mpl.subplots(1, 1)
         psd = [None]*self.waves.shape[0]
         psdwindow = np.zeros(self.waves.shape[0])
         for i in range(self.waves.shape[0]):
@@ -556,14 +742,8 @@ class Analyzer(object):
                 fs, nperseg=256, nfft=8192, scaling='density')
             frx, = np.where((f >= fr[0]) & (f <= fr[1]))
             psdwindow[i] = np.nanmean(psd[i][frx[0]:frx[-1]])
-#            ax.semilogy(f, psd[i])
-        # ax.set_ylim([0.1e-4, 0.1])
-        # ax.set_xlim([10., 2000.])
-        # ax.set_xlabel('F (Hz)')
-        # ax.set_ylabel('PSD (uV^2/Hz)')
-        # mpl.show()
         self.fr = f
-        self.psd = psd
+        self.psd = psd  # save the psds to look at later if desired
         self.psdwindow = psdwindow
         return psdwindow
 
@@ -571,17 +751,32 @@ class Analyzer(object):
         """
         Auto threshold detection:
         BMC Neuroscience200910:104  DOI: 10.1186/1471-2202-10-104
-        Use last 10 msec of 15 msec window for SD estimates
+        Use last 10 msec of 25 msec window for SD estimates
         Computes SNR (max(abs(signal))/reference SD) for a group of traces
         The reference SD is the MEDIAN SD across the intensity run.
-        Th
         
+        Parameters
+        ----------
+        waves : numpy array
+            2-d array, spl x time for waveforms collected from one run.
+        spls : list 
+            List of SPLS (floats) in the run
+        tr : list of floats (default : [0., 8.])
+            beginning and end time for the signal analysis window
+        SD : float (default : 4.0)
+            criterion to set the threshold level, in standard deviations 
+        
+        Returns
+        -------
+        spls : spls where the signal is above threshold. If no threshold was
+            found, returns a np.nan
         """
         refwin = self.gettimeindices([15., 25.])
         sds = np.std(waves[:,refwin[0]:refwin[-1]], axis=1)
         self.median_sd = np.nanmedian(sds)
         tx = self.gettimeindices(tr)
         self.max_wave = np.max(np.fabs(waves[:, tx[0]:tx[-1]]), axis=1)
+        self.snr = self.max_wave / self.median_sd
         thr, = np.where(self.max_wave >= self.median_sd*SD)  # find criteria threshold
         thrx, = np.where(np.diff(thr) == 1)  # find first contiguous point (remove low threshold non-contiguous)
         if len(thrx) > 0:
@@ -591,13 +786,25 @@ class Analyzer(object):
 
     def threshold_spec(self, waves, spls, tr=[0., 8.], SD=4.0):
         """
-        Auto threshold detection:
-        BMC Neuroscience200910:104  DOI: 10.1186/1471-2202-10-104
-        Use last 10 msec of 15 msec window for SD estimates
-        Computes SNR (max(abs(signal))/reference SD) for a group of traces
-        The reference SD is the MEDIAN SD across the intensity run.
+        Auto threshold detection using power spectrum:
+        Use last 10 msec of 25 msec window for noise spectral estimates
+
+        Parameters
+        ----------
+        waves : numpy array
+            2-d array, spl x time for waveforms collected from one run.
+        spls : list 
+            List of SPLS (floats) in the run
+        tr : list of floats (default : [0., 8.])
+            beginning and end time for the signal analysis window
+        SD : float (default : 4.0)
+            criterion to set the threshold level, in standard deviations
+            of signal power in the noise window.
         
-        MODIFIED version: criteria based on power spec
+        Returns
+        -------
+        spls : spls where the signal is above threshold. If no threshold was
+            found, returns a np.nan
         
         """
         refwin = self.gettimeindices([15., 25.])
@@ -624,15 +831,42 @@ class ABRWriter():
         Write one ABR file for Brad Buran's analysis program, in "EPL"
         format.
         
-        TODO : fix this so that the ABR-files have names and check that it works.
+        TODO : fix this so that the ABR-files have proper and useful names, and check that it works.
+        Note : This may not be necessary to have. The findpeaks routine in peakdetector.py from
+                Buran's code is directly called above. This class is only necessary if you want to 
+                use his code to get times etc.
+        Filename structures:
+            ABR-click-time  indicate click intenstiry series run in this
+                directory, use time to distinguish file
+                Example: ABR-click-0901.abr
+            ABR-tone-time-freq indicate tone run number in this directory
+                with frequency in Hz (6 places).
+                Example: ABR-tone-0945-005460.dat
+
+        Parameters
+        ----------
+        dataset : dict
+            information about the dataset that will be analyzed
         
-        ABR-click-time  indicate click intenstiry series run in this
-            directory, use time to distinguish file
-            Example: ABR-click-0901.abr
-        ABR-tone-time-freq indicate tone run number in this directory
-            with frequency in Hz (6 places).
-            Example: ABR-tone-0945-005460.dat
+        waves : numpy array
+            2-d array, spl x time for waveforms collected from one run.
         
+        filename : str
+            name of the file
+        
+        freqs : list
+            List of frequencies (floats) in the filename if the stimtype is
+            a tonepip
+        
+        spls : list 
+            List of SPLS (floats) in the run
+        
+        fileindex : int (default: None)
+            Index to the frequency to be written.
+        
+        Returns
+        -------
+        str : the filename that was written
         """
         self.freqs = freqs
         self.spls = spls
@@ -724,14 +958,15 @@ if __name__ == '__main__':
         raise ValueError('Data set %s not found in our list of known datasets')
     if mode not in ['tones', 'clicks']:
         raise ValueError('Second argument must be tones or clicks')
-
-    top_directory = os.path.join(basedir, ABR_Datasets[dsname])
+    top_directory = os.path.join(basedir, ABR_Datasets[dsname]['dir'])
     
     dirs = [tdir for tdir in os.listdir(top_directory) if os.path.isdir(os.path.join(top_directory, tdir))]
 
     if mode == 'clicks':
-        clicksel = [['0849'], None, None, None, None, None, None, None]
-        #clicksel = [None]*len(dirs)
+        if 'clickselect' in ABR_Datasets[dsname].keys():
+            clicksel = ABR_Datasets[dsname]['clickselect']
+        else:
+            clicksel = [None]*len(dirs)
         rowlen = 8.
         m = int(np.ceil(len(clicksel)/rowlen))
         if m == 1:
@@ -750,20 +985,26 @@ if __name__ == '__main__':
             axarr = axarr.ravel()
         fofilename = os.path.join(top_directory, 'ClickSummary.pdf')
         for k in range(len(clicksel)):
-            P = ABR(os.path.join(top_directory, dirs[k]), mode)
-            P.plotClicks(select=clicksel[k], plottarget=axarr[k], superIOPlot=IOax) # , IOplot=axarr2[k])
+            if 'nameselect' in ABR_Datasets[dsname].keys():  # limit directories to those with some string in the filename
+                if dirs[k].find(ABR_Datasets[dsname]['nameselect']) == -1:
+                    continue
+            P = ABR(os.path.join(top_directory, dirs[k]), mode, info=ABR_Datasets[dsname])
+            P.getClickData(select=clicksel[k]) 
+            P.plotClicks(plottarget=axarr[k], superIOPlot=IOax) # , IOplot=axarr2[k])
         mpl.savefig(fofilename)
         
     if mode == 'tones':
         # first one has issues: 1346 stops at 40dbspl for all traces
         # 1301+1327 seem to have the higher levels, but small responses; remainder have fragementary frequencies
         # 0901 has whole series (but, is it hte same mouse?)
-        tonesel = [['0901'], ['1446', '1505'], None, None, None, None, None, None]
-        #tonesel = [None]*len(dirs)
+        if 'toneselect' in ABR_Datasets[dsname].keys():
+            tonesel = ABR_Datasets[dsname]['toneselect']
+        else:
+            tonesel = [None]*len(dirs)
         fofilename = os.path.join(top_directory, 'ToneSummary.pdf')
         with PdfPages(fofilename) as pdf:
             for k in range(len(tonesel)):
-                P = ABR(os.path.join(top_directory, dirs[k]), mode)
+                P = ABR(os.path.join(top_directory, dirs[k]), mode, info=ABR_Datasets[dsname])
                 P.plotTones(select=tonesel[k], pdf=pdf)
 
     mpl.show()
