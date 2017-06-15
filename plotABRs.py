@@ -4,6 +4,7 @@ import re
 import os.path
 import commands
 import glob
+from collections import OrderedDict
 # from optparse import OptionParser
 import pandas as pd
 import numpy as np
@@ -74,7 +75,7 @@ class ABR():
         self.hpf = 300.
         self.lpf = 1500.  # filter frequencies, Hz
         self.clickdata = {}
-        self.tonemapdata = []
+        self.tonemapdata = {}
         # build color map where each SPL is a color (cycles over 12 levels)
         bounds = np.linspace(0, 120, 25)  # 0 to 120 db inclusive, 5 db steps
         color_labels = np.unique(bounds)
@@ -117,6 +118,7 @@ class ABR():
         # that can be found.
         print 'Frequency maps: '
         self.tonemaps = {}
+        print self.freqs
         for f in self.freqs.keys():
             self.tonemaps[f] = {'stimtype': 'tonepip', 'Freqs': self.freqs[f], 'SPLs': self.spls[f[:13]]}
             if mode == 'tones':
@@ -131,7 +133,12 @@ class ABR():
                 print '        ', self.clickmaps[s]
 
     def getClickData(self, select):
-        select = self.adjustSelection(select)
+        """
+        Gets the click data for the current selection
+        The resulting data is held in a dictionary structured as
+        {mapidentity: dict of {waves, time, spls and optional marker}
+        """
+        select, freqs = self.adjustSelection(select)
         # get data for clicks and plot all on one plot
         self.clickdata = {}
         for i, s in enumerate(self.clickmaps.keys()):
@@ -154,6 +161,41 @@ class ABR():
             spls = self.clickmaps[s]['SPLs']  # get spls
             self.clickdata[s] = {'waves': waves, 'timebase': t, 'spls': spls, 'marker': smarker}
 
+    def getToneData(self, select):
+        """
+        Gets the tone map data for the current selection
+        The resulting data is held in a dictionary structured as
+        {mapidentity: dict of frequencies}
+        Where each dictoffrequencies holds a dict of {waves, time, spls and optional marker}
+        
+        """
+        select, freqs = self.adjustSelection(select)
+        self.tonemapdata = {}
+        # convert select to make life easier 
+        # select list should have lists of strings ['0124', '0244'] or Nones...
+        select, freqs = self.adjustSelection(select, tone=True)
+        for i, s in enumerate(self.tonemaps.keys()):
+            freqs = []
+            if select is not None:
+                if s[9:] not in select:
+                    continue
+            for f in self.tonemaps[s]['Freqs']:
+                if f not in freqs:
+                    freqs.append(f)
+            freqs.sort()
+            if len(freqs) == 0:  # check of no tone pip ABR data in this directory
+                continue
+            # now we can build the tonemapdata
+            self.tonemapdata[s] = OrderedDict()
+            for fr in self.tonemaps[s]['Freqs']:
+                waves = self.get_combineddata(s, self.tonemaps[s], freq=fr)
+                if waves is None:
+                    print('Malformed data set for run %s. Continuing' % s)
+                    continue
+                t = np.linspace(0, waves.shape[1]*self.sample_rate*1000., waves.shape[1])
+                spls = self.tonemaps[s]['SPLs']
+                self.tonemapdata[s][fr] = {'waves': waves, 'timebase': t, 'spls': spls, 'marker': 'ko-'}
+        
     def plotClicks(self, plottarget=None, IOplot=None, PSDplot=None, superIOPlot=None):
         """
         Plot the click ABR intensity series, one column per subject, for one subject
@@ -310,46 +352,24 @@ class ABR():
 
         """
         if len(self.tonemapdata) == 0:
-            raise ValueError('plotClicks requires that self.clickdata be populated first')
+            raise ValueError('plotTones requires that self.tonemapdata be populated first')
         
         A = Analyzer()  # create an instance of analyzer to use here
-        
-        for s in self.tonemapdata.keys():
-            waves = self.tonemapdata[s]['waves']
-            t = self.tonemapdata[s]['timebase']
-            spls = self.tonemapdata[s]['spls']
-            thrs = {}
         freqs = []
-        # convert select to make life easier 
-        # select list should have lists of strings ['0124', '0244'] or Nones...
-        select, freqs = self.adjustSelection(select, tone=True)
-        for i, s in enumerate(self.tonemaps.keys()):
-            if select is not None:
-                if s[9:] not in select:
-                    continue
-            for f in self.tonemaps[s]['Freqs']:
-                if f not in freqs:
-                    freqs.append(f)
+        for run in self.tonemapdata.keys():  # just passing one dict... 
+            freqs.extend(self.tonemapdata[run].keys())
         freqs.sort()
-        if len(freqs) == 0:  # check of no tone pip ABR data in this directory
-            return
-
-        f, axarr = mpl.subplots(1, len(freqs), figsize=(12,6))
+        f,  axarr = mpl.subplots(1, len(freqs), figsize=(12,6))
         datatitle = os.path.basename(os.path.normpath(self.datapath))[15:]
         datatitle = datatitle.replace('_', '\_')
         f.suptitle(datatitle)
         A = Analyzer()
         thrs = {}
-        for i, s in enumerate(self.tonemaps.keys()):
-            if select is not None:
-                if s[9:] not in select:
-                    continue
-            for fr in self.tonemaps[s]['Freqs']:
-                waves = self.get_combineddata(s, self.tonemaps[s], freq=fr)
-                if waves is None:
-                    continue
-                t = np.linspace(0, waves.shape[1]*self.sample_rate*1000., waves.shape[1])
-                spls = self.tonemaps[s]['SPLs']
+        for i, s in enumerate(self.tonemapdata.keys()):
+            for fr in self.tonemapdata[s]:  # next key is frequency
+                waves = self.tonemapdata[s][fr]['waves']
+                t = self.tonemapdata[s][fr]['timebase']
+                spls = self.tonemapdata[s][fr]['spls']
                 A.analyze(t, waves)
                 thr_spl = A.threshold_spec(waves, spls, SD=3.5)
                 thrs[s] = thr_spl
@@ -371,21 +391,20 @@ class ABR():
     def adjustSelection(self, select, tone=False):
         freqs = []
         if select is None:
-            return select
+            return select, freqs
         for i, s in enumerate(select):
             if s is None:
                 continue
             if isinstance(s, int):
-                select[i] = '%04d' % s
-            if isinstance(s, str) and len(s) < 4:
+                select[i] = '%04d' % s  # convert to string
+            if isinstance(s, str) and len(s) < 4:  # make sure size is ok
                 select[i] = '%04d' % int(s)
             if tone:
-                for f in self.tonemaps[s]['Freqs']:
+                base = self.tonemaps.keys()[0][:9]
+                for f in self.tonemaps[base + select[i]]['Freqs']:
                     if f not in freqs:
                         freqs.append(f)
-                return select, freqs
-            else:
-                return select
+        return select, freqs
 
     def cleanAxes(self, axl):
         """
@@ -435,7 +454,7 @@ class ABR():
         """
         # return all the tone response runs in the directory. These are marked by having a 'khz'
         # file - but the case may change with program version, so ignore the case
-        freqs = [f[:-8] for f in os.listdir(self.datapath) if re.search(f, 'kHz', re.IGNORECASE)]
+        freqs = [f[:-8] for f in os.listdir(self.datapath) if re.search('kHz', f, re.IGNORECASE) is not None]
         rundict = {}
         for run in freqs:
           try:
@@ -521,7 +540,7 @@ class ABR():
                 posseries.append(posf[col][i])
         
         wvfmdata = [(x + y)/2 for x, y in zip(negseries, posseries)]
-#        wvfmdata = negseries  # just get one polarity
+        #wvfmdata = negseries  # just get one polarity
         # print fnamepos
         # print posf.shape
         # print 'col: ', col
@@ -535,7 +554,6 @@ class ABR():
             if self.invert:
                 waves[i,:] = -waves[i,:]
         return waves
-
 
     def filter(self, data, order, lowpass, highpass, samplefreq, ftype='butter'):
         """
@@ -810,15 +828,11 @@ class Analyzer(object):
         refwin = self.gettimeindices([15., 25.])
         sds = self.specpower(fr=[800., 1250.], win=[refwin[0], refwin[-1]])
         self.median_sd = np.nanmedian(sds)
-        print 'median sds: ', self.median_sd
         tx = self.gettimeindices(tr)
         self.max_wave = self.specpower(fr=[800., 1250.], win=[tx[0], tx[-1]])
         #np.max(np.fabs(waves[:, tx[0]:tx[-1]]), axis=1)
-        print self.max_wave
-        print self.median_sd
         thr, = np.where(self.max_wave >= self.median_sd*SD)  # find criteria threshold
-        print 'thr: ', thr
-#        thrx, = np.where(np.diff(thr) == 1)  # find first contiguous point (remove low threshold non-contiguous)
+        # thrx, = np.where(np.diff(thr) == 1)  # find first contiguous point (remove low threshold non-contiguous)
         if len(thr) > 0:
             return spls[thr[0]]
         else:
@@ -908,7 +922,7 @@ class ABRWriter():
         levs = self.spls[filename] # spls[ABRfiles[i]]
         levels = ['%2d;'.join(int(l)) for l in levs]
         header5 = ":LEVELS:" + levels + ' \n'
-#            header5 = ":LEVELS:20;25;30;35;40;45;50;55;60;65;70;75;80;85;90; \n"
+        #    header5 = ":LEVELS:20;25;30;35;40;45;50;55;60;65;70;75;80;85;90; \n"
         header6 = ":DATA \n"
         header = header1 + header2 + header3 + header4 + header5 + header6
         return header
@@ -1005,6 +1019,7 @@ if __name__ == '__main__':
         with PdfPages(fofilename) as pdf:
             for k in range(len(tonesel)):
                 P = ABR(os.path.join(top_directory, dirs[k]), mode, info=ABR_Datasets[dsname])
-                P.plotTones(select=tonesel[k], pdf=pdf)
+                P.getToneData(select=tonesel[k]) 
+                P.plotTones( pdf=pdf)
 
     mpl.show()
