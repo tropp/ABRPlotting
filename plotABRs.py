@@ -2,6 +2,7 @@ import sys
 import os
 import os.path
 import commands
+from collections import OrderedDict
 # from optparse import OptionParser
 import pandas as pd
 import numpy as np
@@ -18,7 +19,8 @@ computer_name = commands.getoutput('scutil --get ComputerName')
 if computer_name == 'Lytle':
     basedir = '/Volumes/Pegasus/ManisLab_Data3/abr_data'
 elif computer_name == 'Tamalpais':
-    basedir = '/Users/pbmanis/Desktop/data/ABR_DATA'
+    #basedir = '/Users/pbmanis/Desktop/data/ABR_DATA'
+    basedir = '/Volumes/Backup2B/ABR_DATA'
 else:
     raise ValueError("Need valid computer name to set base path to data")
     
@@ -34,7 +36,8 @@ ABR_Datasets = {'NrCAM': "Tessa/Coate-NrCAM-ABRs/",
                  'GP43Norm': 'Tessa/GP4.3-Thy1-Normal',
                  'Yong': "Yong\'s ABRs",
                  'Jun': "JUN\'s ABRs",
-                 'Ruili': "Ruili\'s ABRs",
+                 'RuiliCBAP40': "RuiliABRdata_2010-2015/CBA-P21-P40/",
+                 'RuiliCBAP20': "RuiliABRdata_2010-2015/CBA-P10-P20/",
                  'Eveleen': "Eveleen\'s ABRs"
                  } 
                  
@@ -99,10 +102,19 @@ class ABR():
         # build color map where each SPL is a color (cycles over 12 levels)
         bounds = np.linspace(0, 120, 25)  # 0 to 120 db inclusive, 5 db steps
         color_labels = np.unique(bounds)
-        rgb_values = sns.color_palette("Set2", 25)
-        # Map label to RGB
-        self.color_map = dict(zip(color_labels, rgb_values))
+        self.color_map = self.makeColorMap(25, color_labels)
+        color_labels2 = range(25)
+        self.summaryClick_color_map = self.makeColorMap(25, range(25))
 
+    def makeColorMap(self, N, labels):
+        """
+        create a color map of N levels using the specified labels
+        
+        """
+        rgb_values = sns.color_palette("Set2", N)
+        return dict(zip(labels, rgb_values))
+
+        
     def plotClicks(self, select=None, plottarget=None, IOplot=None, PSDplot=None, superIOPlot=None):
         """
         Plot the click ABR intensity series, one column per subject, for one subject
@@ -186,7 +198,7 @@ class ABR():
                     IO[j] = 1.e6*waves[j][ti]
             
             if superIOPlot is not None:
-                superIOPlot.plot(spls, IO, smarker)
+                superIOPlot.plot(spls, IO, smarker, color=self.summaryClick_color_map[i])
 
             if IOplot is not None:
                 IOplot.plot(spls, 1e6*A.ppio, A.ppioMarker)
@@ -229,6 +241,7 @@ class ABR():
             pdf, one page per subject. 
 
         """
+        self.thrs = {}  # holds thresholds for this dataset
         freqs = []
         for i, s in enumerate(self.tonemaps.keys()):
             print i, s, s[9:]
@@ -242,23 +255,23 @@ class ABR():
         if len(freqs) == 0:  # check of no tone pip ABR data in this directory
             return
 
-        f, axarr = mpl.subplots(1, len(freqs), figsize=(12,6))
+        f, axarr = mpl.subplots(1, len(freqs), figsize=(12,6), num="Tones")
         datatitle = os.path.basename(os.path.normpath(self.datapath))[15:]
         datatitle = datatitle.replace('_', '\_')
         f.suptitle(datatitle)
         A = Analyzer()
-        thrs = {}
         for i, s in enumerate(self.tonemaps.keys()):
             if select is not None:
                 if s[9:] not in select:
                     continue
-            for fr in self.tonemaps[s]['Freqs']:
+            thr_spls = np.zeros(len(self.tonemaps[s]['Freqs']))
+            for k, fr in enumerate(self.tonemaps[s]['Freqs']):
                 waves = self.get_combineddata(s, self.tonemaps[s], freq=fr)
                 t = np.linspace(0, waves.shape[1]*self.sample_rate*1000., waves.shape[1])
                 spls = self.tonemaps[s]['SPLs']
                 A.analyze(t, waves)
                 thr_spl = A.threshold_spec(waves, spls, SD=3.5)
-                thrs[s] = thr_spl
+                thr_spls[k] = thr_spl
                 plottarget = axarr[freqs.index(fr)]
                 for j in range(len(spls))[::-1]:
                     if spls[j] == thr_spl:
@@ -269,11 +282,64 @@ class ABR():
                 frtitle = '%.1f kHz' % (float(fr)/1000.)
                 plottarget.title.set_text(frtitle)
                 plottarget.title.set_size(9)
+            self.thrs[s] = [self.tonemaps[s]['Freqs'], thr_spls] 
         self.cleanAxes(axarr)
         if pdf is not None:
             pdf.savefig()
             mpl.close()
 
+    def plotToneThresholds(self, allthrs, num):
+        """
+        Make a nice plot of the tone thresholds for all of the datasets
+        Data are plotted against a log frequency scale (2-64kHz)
+        Data is plotted into the current figure.
+        
+        Parameters
+        ----------
+        allthrs : dict
+        A dictionary holding all the threshold information. The following
+        structure is required:
+            Keys: filenames for each dataset
+            Values a dict of thresholds. The keys are the names of the tone maps
+            (because more than one tone map may be combined)
+            The values are tuples of (frequency, threshold)
+        
+        Returns
+        -------
+        Nothing
+        """
+        ax = mpl.subplot(1, 1, num=num)
+        ax.set_xscale('log', nonposx='clip', base=2)
+        n_datasets = len(allthrs.keys())
+        c_map = self.makeColorMap(n_datasets, allthrs.keys())
+        
+        thrfrs = {}
+        for i, d in enumerate(allthrs):  # for all the datasets
+            for m in allthrs[d]:  # for all the maps in the dataset combined
+                ax.scatter(np.array(allthrs[d][m][0])/1000., allthrs[d][m][1], color=c_map[d], s=12)
+                for j, f in enumerate(allthrs[d][m][0]):
+                    if f not in thrfrs.keys():
+                        thrfrs[f] = [allthrs[d][m][1][j]]
+                    else:
+                        thrfrs[f].append(allthrs[d][m][1][j])
+        print 'threshold lists: ', thrfrs
+        # sort the threshold list
+        thrs_sorted = OrderedDict(sorted(thrfrs.items(), key=lambda t: t[0]))
+        frmean = np.zeros(len(thrs_sorted.keys()))
+        frstd = np.zeros(len(thrs_sorted.keys()))
+        print 'threshold list sorted: ', thrs_sorted
+        print ('len mean: ', len(frmean))
+        for i, f in enumerate(thrs_sorted):
+            print 'i, f: ', i, f
+            print thrs_sorted[f]
+            frmean[i] = np.nanmean(thrs_sorted[f])
+            frstd[i] = np.nanstd(thrs_sorted[f])
+        ax.errorbar(np.array(thrs_sorted.keys())/1000., frmean, yerr=frstd, fmt='o')
+        ax.set_xlim(1.8, 65.)
+        xt = [2., 4., 8., 16., 32., 64.]
+        mpl.xticks(xt, [str(x) for x in xt])
+#        mpl.show()
+        
     def cleanAxes(self, axl):
         """
         Remove axiessplines on top and right
@@ -730,8 +796,8 @@ if __name__ == '__main__':
     dirs = [tdir for tdir in os.listdir(top_directory) if os.path.isdir(os.path.join(top_directory, tdir))]
 
     if mode == 'clicks':
-        clicksel = [['0849'], None, None, None, None, None, None, None]
-        #clicksel = [None]*len(dirs)
+        #clicksel = [['0849'], None, None, None, None, None, None, None]
+        clicksel = [None]*len(dirs)
         rowlen = 8.
         m = int(np.ceil(len(clicksel)/rowlen))
         if m == 1:
@@ -742,28 +808,42 @@ if __name__ == '__main__':
             h = 4*m
         else:
             h = 5
-        f, axarr = mpl.subplots(m, n, figsize=(12, h))
-#        f2, axarr2 = mpl.subplots(m, n, figsize=(12, h))
+        f, axarr = mpl.subplots(m, n, figsize=(12, h), num='Click Traces')
+        f2, axarr2 = mpl.subplots(m, n, figsize=(12, h), num='Click IO Summary')
 #        f3, axarr3 = mpl.subplots(m, n, figsize=(12, h))
-        f4, IOax = mpl.subplots(1, 1, figsize=(6,6))
+        f4, IOax = mpl.subplots(1, 1, figsize=(6,6), num='Click IO Overlay')
         if axarr.ndim > 1:
             axarr = axarr.ravel()
+        if axarr2.ndim > 1:
+            axarr2 = axarr2.ravel()
         fofilename = os.path.join(top_directory, 'ClickSummary.pdf')
         for k in range(len(clicksel)):
             P = ABR(os.path.join(top_directory, dirs[k]), mode)
-            P.plotClicks(select=clicksel[k], plottarget=axarr[k], superIOPlot=IOax) # , IOplot=axarr2[k])
+            P.plotClicks(select=clicksel[k], plottarget=axarr[k], superIOPlot=IOax,
+                IOplot=axarr2[k])
+        mpl.figure('Click Traces')
         mpl.savefig(fofilename)
+        mpl.figure('Click IO Summary')
+        fo2filename = os.path.join(top_directory, 'ClickIOSummary.pdf')
+        mpl.savefig(fo2filename)
+        mpl.figure('Click IO Overlay')
+        fo4filename = os.path.join(top_directory, 'ClickIOOverlay.pdf')
+        mpl.savefig(fo4filename)
         
     if mode == 'tones':
         # first one has issues: 1346 stops at 40dbspl for all traces
         # 1301+1327 seem to have the higher levels, but small responses; remainder have fragementary frequencies
         # 0901 has whole series (but, is it hte same mouse?)
-        tonesel = [['0901'], ['1446', '1505'], None, None, None, None, None, None]
-        #tonesel = [None]*len(dirs)
+        #tonesel = [['0901'], ['1446', '1505'], None, None, None, None, None, None]
+        tonesel = [None]*len(dirs)
         fofilename = os.path.join(top_directory, 'ToneSummary.pdf')
+        allthrs = {}
         with PdfPages(fofilename) as pdf:
             for k in range(len(tonesel)):
                 P = ABR(os.path.join(top_directory, dirs[k]), mode)
                 P.plotTones(select=tonesel[k], pdf=pdf)
-
+                allthrs[dirs[k]] = P.thrs
+        P.plotToneThresholds(allthrs, num='Tone Thresholds')
+        tthr_filename = os.path.join(top_directory, 'ToneThresholds.pdf')
+        mpl.savefig(tthr_filename)
     mpl.show()
