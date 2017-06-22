@@ -134,6 +134,8 @@ class ABR():
         A = Analyzer()
         thrs = {}
         for i, s in enumerate(self.clickmaps.keys()):
+            print 'select: ', select
+            print 's: ', s
             if select is not None:
                 if s[9:] not in select:
                     continue
@@ -796,7 +798,7 @@ if __name__ == '__main__':
     dirs = [tdir for tdir in os.listdir(top_directory) if os.path.isdir(os.path.join(top_directory, tdir))]
 
     if mode == 'clicks':
-        #clicksel = [['0849'], None, None, None, None, None, None, None]
+#        clicksel = [['0849'], None, None, None, None, None, None, None]
         clicksel = [None]*len(dirs)
         rowlen = 8.
         m = int(np.ceil(len(clicksel)/rowlen))
