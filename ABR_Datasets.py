@@ -1,13 +1,29 @@
-#current 10 June 2017
+# current 10 June 2017
 # This table should eventually be converted to an excel spreadsheet organized
 # with a worksheet for each data set, and within each worksheet, each subject's information
 # placed in a single row. Make the table pandas-readable.
-
 # on the other hand, for now, it is useful as is.
+
+"""
+The keys are the names of the data sets (used on the command line)
+The order in the nested dictionary is unimportant.
+Each entry in the nested dictionary is structured as follows:
+
+'dir': string - the path to the data
+'invert' : boolena - if True, the polarity will be flipped
+'clickselect': a list indicating the times of the useful protocol runs for the clicks
+                if not defined, then all runs that are found are used.
+                if runs need to be combined, then include them together (see toneselect in the NrCAMKO dataset)
+'toneselect': a list of the tone protocol runs (see clickselect for format)
+'term' : line terminator - may depend on how data has been passed through an editor. 
+'minlat' : float. Minimum latency for an event (response)
+'nameselect': if a dataset directory has more than one type of data, this helps to filter it.
+
+"""
 
 ABR_Datasets = { 'NrCAMKO': {'dir': "Tessa/Coate-NrCAM-ABRs/KO", 
                     'invert': True, 
-                    'clickselect: ': [['0849'], None, None, None, None, None, None, None],
+                    'clickselect': [['0849'], None, None, None, None, None, None, None],
                     'toneselect': [['0901'], ['1446', '1505'], None, None, None, None, None, None],
                     'term': '\r', 'minlat': 2.2},
                  'NrCAMWT': {'dir': "Tessa/Coate-NrCAM-ABRs/WT", 
