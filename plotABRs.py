@@ -284,7 +284,7 @@ class ABR():
             
             if superIOPlot is not None:  # superimposed IO plots
                 datatitle_short = os.path.basename(os.path.normpath(self.datapath))
-                superIOPlot.plot(spls, IO, self.clickdata[s]['marker'], color=self.summaryClick_color_map[icol], label=datatitle_short)
+                superIOPlot.plot(spls, 1e6*A.ppio, self.clickdata[s]['marker'], color=self.summaryClick_color_map[icol], label=datatitle_short)
                 
                 # print out the data for import into another plotting program, such as Prism or Igor
                 print( '*'*20)
