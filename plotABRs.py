@@ -4,65 +4,31 @@ import sys
 import os
 import re
 import os.path
-import commands
 import glob
 from collections import OrderedDict
-# from optparse import OptionParser
 import pandas as pd
 import numpy as np
 import scipy.signal
 import matplotlib.pyplot as mpl
-#import matplotlib.colors as colors
 import itertools
 import seaborn as sns  # makes plot background light grey with grid, no splines. Remove for publication plots
-import peakdetect  # from Brad Buran's project
+import peakdetect  # from Brad Buran's project, but cloned and modified here
 from matplotlib.backends.backend_pdf import PdfPages
 
-computer_name = commands.getoutput('scutil --get ComputerName')
-if computer_name == 'Lytle':
-    basedir = '/Volumes/Pegasus/ManisLab_Data3/abr_data'
-elif computer_name == 'Tamalpais':
-    #basedir = '/Users/pbmanis/Desktop/data/ABR_DATA'
-    basedir = '/Volumes/Backup2B/ABR_DATA'
-else:
-    raise ValueError("Need valid computer name to set base path to data")
-    
-#current 10 June 2017
-# This table should be converted to an excel spreadsheet organized
-# with a worksheet for each data set, and within each worksheet, each subject's information
-# placed in a single row. Make the table pandas-readable.
+from getcomputer import getcomputer # stub to return the computer and base directory
+from ABR_Datasets import ABR_Datasets # just the dict describing the datasets
 
-ABR_Datasets = { 'NrCAMKO': {'dir': "Tessa/Coate-NrCAM-ABRs/KO", 
-                    'invert': True, 
-                    'clickselect: ': [['0849'], None, None, None, None, None, None, None],
-                    'toneselect': [['0901'], ['1446', '1505'], None, None, None, None, None, None],
-                    'term': '\r', 'minlat': 2.2},
-                 'NrCAMWT': {'dir': "Tessa/Coate-NrCAM-ABRs/WT", 
-                                        'invert': True, 
-                                        'term': '\r', 'minlat': 2.2},
-                 'TessaCBA': {'dir': 'Tessa/CBA', 'term': '\r', 'minlat': 2.2, 'invert': True},
-                 'TessaCBANE': {'dir': 'Tessa/CBA_NoiseExposed', 'term': '\r', 'minlat': 2.2, 'invert': True},
-                 'CNTNAP2X': {'dir': 'Tessa/CNTNAP2', 'term': '\r', 'minlat': 2.2, 'invert': True},
-                 'CNTNAP2Het': {'dir': 'Tessa/CNTNAP2_Het', 'term': '\r', 'minlat': 2.2, 'invert': True},
-                 'CNTNAP2HG': {'dir': 'Tessa/CNTNAP2_Het_GP4.3', 'term': '\r', 'minlat': 2.2, 'invert': True},
-                 'CNTNAP2KO': {'dir': 'Tessa/CNTNAP2_KO',
-                     'term': '\r', 'minlat': 2.2, 'invert': True},
-                 'CNTNAP2WT': {'dir': 'Tessa/CNTNAP2_WT', 'term': '\r', 'minlat': 2.2, 'invert': True},
-                 'GP43Norm': {'dir': 'Tessa/GP4.3-Thy1-Normal', 'term': '\r', 'minlat': 2.2, 'invert': True},
-                 'Yong': {'dir': "Yong\'s ABRs", 'invert': True,
-                     'term':'\n', 'minlat': 0.6},
-                 'Jun': {'dir': "JUN\'s ABRs", 'term': '\r', 'minlat': 2.2, 'invert': False},
-                 'Ruili': {'dir': "Ruilis ABRs", 'invert': True, 'nameselect': 'CBA',
-                     'term':'\n', 'minlat': 0.6},
-                 'RuiliCBAP40': {'dir': 'RuiliABRData_2010-2015/CBA-P21-P40',
-                     'invert': True, 'nameselect': 'CBA',
-                     'term':'\n', 'minlat': 0.6},
-                 'RuiliCBAP20': {'dir': 'RuiliABRData_2010-2015/CBA-P10-P20',
-                     'invert': True, 'nameselect': 'CBA',
-                     'term':'\n', 'minlat': 0.6},
-                 'Eveleen': {'dir': "Eveleen\'s ABRs", 'term': '\r', 'minlat': 2.2, 'invert': False},
-                 'Amber': {'dir': "Amber_ABR_data", 'term': '\r', 'minlat': 2.2, 'invert': True}
-                 }
+basedir, computer_name = getcomputer()
+
+# computer_name = commands.getoutput('scutil --get ComputerName')
+# if computer_name == 'Lytle':
+#     basedir = '/Volumes/Pegasus/ManisLab_Data3/abr_data'
+# elif computer_name == 'Tamalpais':
+#     #basedir = '/Users/pbmanis/Desktop/data/ABR_DATA'
+#     basedir = '/Volumes/Backup2B/ABR_DATA'
+# else:
+#     raise ValueError("Need valid computer name to set base path to data")
+    
 
 
 class ABR():
