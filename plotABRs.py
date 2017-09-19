@@ -1,3 +1,5 @@
+#!/usr/bin/python
+from __future__ import print_function
 import sys
 import os
 import re
@@ -30,11 +32,14 @@ else:
 # with a worksheet for each data set, and within each worksheet, each subject's information
 # placed in a single row. Make the table pandas-readable.
 
-ABR_Datasets = {'NrCAM': {'dir': "Tessa/Coate-NrCAM-ABRs/", 
+ABR_Datasets = { 'NrCAMKO': {'dir': "Tessa/Coate-NrCAM-ABRs/KO", 
                     'invert': True, 
                     'clickselect: ': [['0849'], None, None, None, None, None, None, None],
                     'toneselect': [['0901'], ['1446', '1505'], None, None, None, None, None, None],
                     'term': '\r', 'minlat': 2.2},
+                 'NrCAMWT': {'dir': "Tessa/Coate-NrCAM-ABRs/WT", 
+                                        'invert': True, 
+                                        'term': '\r', 'minlat': 2.2},
                  'TessaCBA': {'dir': 'Tessa/CBA', 'term': '\r', 'minlat': 2.2, 'invert': True},
                  'TessaCBANE': {'dir': 'Tessa/CBA_NoiseExposed', 'term': '\r', 'minlat': 2.2, 'invert': True},
                  'CNTNAP2X': {'dir': 'Tessa/CNTNAP2', 'term': '\r', 'minlat': 2.2, 'invert': True},
@@ -56,6 +61,7 @@ ABR_Datasets = {'NrCAM': {'dir': "Tessa/Coate-NrCAM-ABRs/",
                      'invert': True, 'nameselect': 'CBA',
                      'term':'\n', 'minlat': 0.6},
                  'Eveleen': {'dir': "Eveleen\'s ABRs", 'term': '\r', 'minlat': 2.2, 'invert': False},
+                 'Amber': {'dir': "Amber_ABR_data", 'term': '\r', 'minlat': 2.2, 'invert': True}
                  }
 
 
@@ -70,6 +76,17 @@ class ABR():
         Path to the datasets. The data sets are expected to be collected under this
         path into individual directories, each with the results of the ABR runs for
         one subject.
+    mode : string ('clicks' or 'tones')
+        Specify type of data in the data set
+    info : dict
+        Dictionary with the following keys:
+            invert : boolean (default : False)
+                Changes sign of waveform if True
+            minlat : float (default 0.75)
+                minimum latency for event detection
+            term : float (default '\r')
+                line terminator (may change if the data has been read by an editor or is
+                on a windows vs. mac vs linux system)
     """
     
     def __init__(self, datapath, mode='clicks',  info={'invert': False, 'minlat': 0.75, 'term': '\r'}):
@@ -117,7 +134,15 @@ class ABR():
         The runs are stored in separate dictionaries for the click and tone map runs, including
         their SPL levels (and for tone maps, frequencies).
         
+        Parameters
+        ----------
+        None
+        
+        Returns
+        -------
+        Nothing
         """
+        
         files = [f for f in os.listdir(self.datapath) if os.path.isfile(os.path.join(self.datapath, f))]        
         self.spls = self.getSPLs(files)
         self.freqs = self.getFreqs(files)
@@ -135,22 +160,32 @@ class ABR():
             self.tonemaps[f] = {'stimtype': 'tonepip', 'Freqs': self.freqs[f], 'SPLs': self.spls[f[:13]]}
             if mode == 'tones':
                 if i == 0:
-                    print '  Frequency maps: '
-                print '    ', f, self.tonemaps[f]
+                    print( '  Frequency maps: ')
+                print ('    ', f, self.tonemaps[f])
 
         self.clickmaps = {}
         for i, s in enumerate(self.clicks.keys()):
             self.clickmaps[s] = {'stimtype': 'click', 'SPLs': self.spls[s]}
             if mode == 'clicks':
                 if i == 0:
-                    print '\n  Click Intensity Runs: '
-                print '    Run: %s' % s
-                print '        ', self.clickmaps[s]
+                    print ('\n  Click Intensity Runs: ')
+                print( '    Run: {:s}'.format(s))
+                print( '        {:s}'.format(self.clickmaps[s]))
 
     def makeColorMap(self, N, labels):
         """
         create a color map of N levels using the specified labels
         
+        Parameters
+        ----------
+        N : int
+            Number of color levels
+        labels : tuples
+            list of tuples of rgb values corresponding to color levels
+        
+        Returns
+        -------
+        dict for colormap
         """
         rgb_values = sns.color_palette("Set2", N)
         return dict(zip(labels, rgb_values))
@@ -160,6 +195,11 @@ class ABR():
         Gets the click data for the current selection
         The resulting data is held in a dictionary structured as
         {mapidentity: dict of {waves, time, spls and optional marker}
+        
+        Parameters
+        ----------
+        select : which data to select (see main section at end of code)
+        
         """
         select, freqs = self.adjustSelection(select)
         # get data for clicks and plot all on one plot
@@ -168,7 +208,7 @@ class ABR():
             if select is not None:
                 if s[9:] not in select:
                     continue
-            if s[0:8] == '20170419':  # these should not be here... should be in excel table 
+            if s[0:8] == '20170419':  # these should not be here... should be in an excel table 
                 smarker = 'go-'
             elif s[0:8] in ['20170608', '20170609']:
                 smarker = 'bs-'
@@ -231,13 +271,24 @@ class ABR():
         
         plottarget : matplotlib axis object
             The axis to plot the data into.
+        
+        IOPlot : Matplotlib Axes object
+            Input output plot target. If not None, then use the specified Mabplotlib Axes for the IO plot
+        
+        PSDPlot : Matplotlib Axes object
+            Power spectral density plot target. If not None, then use the specified Mabplotlib Axes for the plot
+        
+        superIOPlot : Matplotlib Axes object
+            Input output plot target. If not None, then use the specified Mabplotlib Axes for the IO plot
 
         """
         # get data for clicks and plot all on one plot
         A = Analyzer()
         thrs = {}
-        i = colorindex
+        icol = colorindex
         for s in self.clickdata.keys():
+            datatitle = os.path.basename(os.path.normpath(self.datapath)) + '\n' + s
+            #datatitle = datatitle.replace('_', '\_')  # if TeX is enabled, will need to escape the underscores
             waves = self.clickdata[s]['waves']
             t = self.clickdata[s]['timebase']
             spls = self.clickdata[s]['spls']
@@ -251,7 +302,6 @@ class ABR():
                 if spls[j] > halfspl:
                     latmap.append(t[r[j][0]]) # get latency for first value
                     spllat.append(spls[j])
-#            print spllat, latmap
             latp = np.polyfit(spllat, latmap, 1)
             fitline = np.polyval(latp, spls)
             thr_spl = A.threshold_spec(waves, spls, SD=3.5)
@@ -275,36 +325,52 @@ class ABR():
                     IO[j] = 1.e6*(waves[j][r[j][0]] - waves[j][n[j][0]])
                 else:
                     ti = int(fitline[j]/(self.sample_rate*1000.))
-                    #print 'ti: ', ti
                     IO[j] = 1.e6*waves[j][ti]
             
-            if superIOPlot is not None:
-                superIOPlot.plot(spls, IO, self.clickdata[s]['marker'], color=self.summaryClick_color_map[i])
+            if superIOPlot is not None:  # superimposed IO plots
+                datatitle_short = os.path.basename(os.path.normpath(self.datapath))
+                superIOPlot.plot(spls, IO, self.clickdata[s]['marker'], color=self.summaryClick_color_map[icol], label=datatitle_short)
                 
-
-            if IOplot is not None:
-                IOplot.plot(spls, 1e6*A.ppio, marker=A.ppioMarker, color=self.summaryClick_color_map[i])
-                IOplot.plot(spls, 1e6*A.rms_response, marker=A.rmsMarker, color=self.summaryClick_color_map[i])
-                IOplot.plot(spls, 1e6*A.rms_baseline, marker=A.baselineMarker, color='k')
+                # print out the data for import into another plotting program, such as Prism or Igor
+                print( '*'*20)
+                print('dataset: ', s)
+                print('t\tV')
+                for i in range(len(spls)):
+                    print('%.1f\t%.3f' % (spls[i], IO[i]))
+                print('*'*20)
+                
+            if IOplot is not None:  # generic io plot for cell
+                IOplot.set_title(datatitle, {'fontsize': 7})  # directory plus file
+                IOplot.plot(spls, 1e6*A.ppio, marker=A.ppioMarker, color=self.summaryClick_color_map[icol], label='P-P')
+                IOplot.plot(spls, 1e6*A.rms_response, marker=A.rmsMarker, color=self.summaryClick_color_map[icol], label='RMS signal')
+                IOplot.plot(spls, 1e6*A.rms_baseline, marker=A.baselineMarker, color='k', label='RMS baseline')
                 if self.psdIOPlot:
                     ax2 = IOplot.twinx()
-                    ax2.plot(spls, A.psdwindow, marker=A.psdMarker, color='r')
+                    ax2.plot(spls, A.psdwindow, marker=A.psdMarker, color='r', label='PSD signal')
                     ax2.tick_params('y', colors='r')
-            if PSDplot is not None:
+                handles, labels = IOplot.get_legend_handles_labels()
+                legend = IOplot.legend(loc='upper left')
+                for label in legend.get_texts():
+                    label.set_fontsize(6)
+                
+            if PSDplot is not None:  # power spectral density
                 for j in range(len(spls)):
                     PSDplot.semilogy(np.array(A.fr), np.array(A.psd[j])) # color=self.color_map[spls])
                 PSDplot.set_ylim(1e-6, 0.01)
                 PSDplot.set_xlim(100., 2000.)
         plottarget.set_xlim(0, 8.)
         plottarget.set_ylim(10., 115.)
-        datatitle = os.path.basename(os.path.normpath(self.datapath))[15:]
-        datatitle = datatitle.replace('_', '\_')
         plottarget.title.set_text(datatitle)
-        plottarget.title.set_size(9)
-        print""
+        plottarget.title.set_size(7)
+        if superIOPlot is not None:
+            legend = superIOPlot.legend(loc='upper left')
+            for label in legend.get_texts():
+                label.set_fontsize(7)
+            
+        print("")
         for s in thrs.keys():
-            print "dataset: %s  thr=%.0f" % (s, thrs[s])
-        print ""
+            print ("dataset: %s  thr=%.0f" % (s, thrs[s]))
+        print ("")
         
     
     def plotTones(self, select=None, pdf=None):
@@ -396,23 +462,20 @@ class ABR():
                         thrfrs[f] = [allthrs[d][m][1][j]]
                     else:
                         thrfrs[f].append(allthrs[d][m][1][j])
-        # print 'threshold lists: ', thrfrs
         # sort the threshold list
         thrs_sorted = OrderedDict(sorted(thrfrs.items(), key=lambda t: t[0]))
         frmean = np.zeros(len(thrs_sorted.keys()))
         frstd = np.zeros(len(thrs_sorted.keys()))
-        # print 'threshold list sorted: ', thrs_sorted
-        # print ('len mean: ', len(frmean))
+
         for i, f in enumerate(thrs_sorted):
-            print 'i, f: ', i, f
-            print thrs_sorted[f]
+            print ('i, f: ', i, f)
+            print (thrs_sorted[f])
             frmean[i] = np.nanmean(thrs_sorted[f])
             frstd[i] = np.nanstd(thrs_sorted[f])
         ax.errorbar(np.array(thrs_sorted.keys())/1000., frmean, yerr=frstd, fmt='o')
         ax.set_xlim(1.8, 65.)
         xt = [2., 4., 8., 16., 32., 64.]
         mpl.xticks(xt, [str(x) for x in xt])
-#        mpl.show()
 
     def adjustSelection(self, select, tone=False):
         freqs = []
@@ -434,7 +497,7 @@ class ABR():
 
     def cleanAxes(self, axl):
         """
-        Remove axiessplines on top and right
+        Remove axis splines on top and right
         
         Parameters
         ----------
@@ -634,9 +697,9 @@ class ABR():
         w : array
             filtered version of the input signal
         """
-        print 'nans: ', np.argwhere(np.isnan(signal))
+        print ('nans: ', np.argwhere(np.isnan(signal)))
         if debugFlag:
-            print "sfreq: %f LPF: %f HPF: %f" % (samplefreq, LPF, HPF)
+            print ("sfreq: %f LPF: %f HPF: %f" % (samplefreq, LPF, HPF))
         flpf = float(LPF)
         fhpf = float(HPF)
         sf = float(samplefreq)
@@ -644,8 +707,8 @@ class ABR():
         wp = [fhpf/sf2, flpf/sf2]
         ws = [0.5*fhpf/sf2, 2*flpf/sf2]
         if debugFlag:
-            print "signalfilter: samplef: %f  wp: %f, %f  ws: %f, %f lpf: %f  hpf: %f" % (
-               sf, wp[0], wp[1], ws[0], ws[1], flpf, fhpf)
+            print( "signalfilter: samplef: %f  wp: %f, %f  ws: %f, %f lpf: %f  hpf: %f" % (
+               sf, wp[0], wp[1], ws[0], ws[1], flpf, fhpf))
         filter_b, filter_a = scipy.signal.iirdesign(wp, ws,
                 gpass=1.0,
                 gstop=60.0,
@@ -655,7 +718,7 @@ class ABR():
         w = scipy.signal.lfilter(filter_b, filter_a, signal) # filter the incoming signal
         signal = signal + msig
         if debugFlag:
-            print "sig: %f-%f w: %f-%f" % (np.amin(signal), np.amax(signal), np.amin(w), np.amax(w))
+            print ("sig: %f-%f w: %f-%f" % (np.amin(signal), np.amax(signal), np.amin(w), np.amax(w)))
         return(w)
 
 
@@ -780,15 +843,9 @@ class Analyzer(object):
         refwin = self.gettimeindices([15., 25.])
         sds = self.specpower(fr=[800., 1250.], win=[refwin[0], refwin[-1]])
         self.median_sd = np.nanmedian(sds)
-        #print 'median sds: ', self.median_sd
         tx = self.gettimeindices(tr)
         self.max_wave = self.specpower(fr=[800., 1250.], win=[tx[0], tx[-1]])
-        #np.max(np.fabs(waves[:, tx[0]:tx[-1]]), axis=1)
-        # print self.max_wave
-        # print self.median_sd
         thr, = np.where(self.max_wave >= self.median_sd*SD)  # find criteria threshold
-        #print 'thr: ', thr
-#        thrx, = np.where(np.diff(thr) == 1)  # find first contiguous point (remove low threshold non-contiguous)
         if len(thr) > 0:
             return spls[thr[0]]
         else:
@@ -827,6 +884,7 @@ class ABRWriter():
         """
         Create a (partially faked) header string for Buran's ABR analysis program, using data from our
         files.
+        This mimics the Eaton Peabody data header style.
         
         Parameters
         ----------
@@ -897,7 +955,7 @@ if __name__ == '__main__':
         print ('Missing command arguments; call: plotABRs.py datasetname [click, tone]')
         exit(1)
     if dsname not in ABR_Datasets.keys():
-        print ABR_Datasets.keys()
+        print( ABR_Datasets.keys())
         raise ValueError('Data set %s not found in our list of known datasets')
     if mode not in ['tones', 'clicks']:
         raise ValueError('Second argument must be tones or clicks')
@@ -905,7 +963,7 @@ if __name__ == '__main__':
     top_directory = os.path.join(basedir, ABR_Datasets[dsname]['dir'])
     
     dirs = [tdir for tdir in os.listdir(top_directory) if os.path.isdir(os.path.join(top_directory, tdir))]
-
+    print( 'found dirs: ', dirs)
     if mode == 'clicks':
         if 'clickselect' in ABR_Datasets[dsname].keys():
             clicksel = ABR_Datasets[dsname]['clickselect']
@@ -931,13 +989,15 @@ if __name__ == '__main__':
             axarr2 = axarr2.ravel()
         fofilename = os.path.join(top_directory, 'ClickSummary.pdf')
         nsel = len(clicksel)
-        for i, k in enumerate(range(nsel)):
+        print ('Nsel: ', nsel)
+        for icol, k in enumerate(range(nsel)):
             P = ABR(os.path.join(top_directory, dirs[k]), mode, info=ABR_Datasets[dsname])
-            if i == 0:
+            if icol == 0:
                 P.summaryClick_color_map = P.makeColorMap(nsel, range(nsel))
+            print ('icol: ', icol)
             P.getClickData(select=clicksel[k]) 
             P.plotClicks(select=clicksel[k], plottarget=axarr[k], superIOPlot=IOax,
-                IOplot=axarr2[k], colorindex=i)
+                IOplot=axarr2[k], colorindex=icol)
         mpl.figure('Click Traces')
         mpl.savefig(fofilename)
         mpl.figure('Click IO Summary')
