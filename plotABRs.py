@@ -561,7 +561,7 @@ class ABR():
             and m is the length of each waveform
          
         """
-        
+
         posf = pd.io.parsers.read_csv(os.path.join(self.datapath, fnamepos), delim_whitespace=True, lineterminator='\r',
             skip_blank_lines=True, header=0)
         negf = pd.io.parsers.read_csv(os.path.join(self.datapath, fnameneg), delim_whitespace=True, lineterminator='\r',
