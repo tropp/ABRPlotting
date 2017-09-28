@@ -25,7 +25,8 @@ elif computer_name == 'Tamalpais':
 else:
     raise ValueError("Need valid computer name to set base path to data")
     
-#current 10 June 2017
+#current 22 June 2017
+
 # This table should be converted to an excel spreadsheet organized
 # with a worksheet for each data set, and within each worksheet, each subject's information
 # placed in a single row. Make the table pandas-readable.
@@ -57,7 +58,6 @@ ABR_Datasets = {'NrCAM': {'dir': "Tessa/Coate-NrCAM-ABRs/",
                      'term':'\n', 'minlat': 0.6},
                  'Eveleen': {'dir': "Eveleen\'s ABRs", 'term': '\r', 'minlat': 2.2, 'invert': False},
                  }
-
 
 class ABR():
     """
