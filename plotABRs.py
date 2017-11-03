@@ -15,6 +15,7 @@ import seaborn as sns  # makes plot background light grey with grid, no splines.
 import peakdetect  # from Brad Buran's project, but cloned and modified here
 from matplotlib.backends.backend_pdf import PdfPages
 
+
 from getcomputer import getcomputer # stub to return the computer and base directory
 from ABR_Datasets import ABR_Datasets # just the dict describing the datasets
 
