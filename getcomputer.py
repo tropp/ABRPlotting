@@ -15,7 +15,8 @@ def getcomputer():
     elif computer_name == 'RIG5':
     	basedir = 'C:/Users/experimenters/Desktop/ABR_Data'
     else:
-        raise ValueError("Need valid computer name to set base path to data")
+        basedir = '/Volumes/TROPPDRIVE/ABR_data'
+        # raise ValueError("Need valid computer name to set base path to data")
     return basedir, computer_name
 
 if __name__ == '__main__':

@@ -935,6 +935,7 @@ if __name__ == '__main__':
             h = 4*m
         else:
             h = 5
+        n = 2
         f, axarr = mpl.subplots(m, n, figsize=(12, h), num='Click Traces')
         f2, axarr2 = mpl.subplots(m, n, figsize=(12, h), num='Click IO Summary')
 #        f3, axarr3 = mpl.subplots(m, n, figsize=(12, h))
