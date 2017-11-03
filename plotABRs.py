@@ -412,7 +412,7 @@ class ABR():
         thrfrs = {}
         for i, d in enumerate(allthrs):  # for all the datasets
             for m in allthrs[d]:  # for all the maps in the dataset combined
-                ax.scatter(np.array(allthrs[d][m][0])/1000., allthrs[d][m][1], color=c_map[d], s=12)
+                ax.scatter(np.array(allthrs[d][m][0])/1000., allthrs[d][m][1], c=c_map[d], s=12)
                 for j, f in enumerate(allthrs[d][m][0]):
                     if f not in thrfrs.keys():
                         thrfrs[f] = [allthrs[d][m][1][j]]
@@ -424,14 +424,15 @@ class ABR():
         frstd = np.zeros(len(thrs_sorted.keys()))
 
         for i, f in enumerate(thrs_sorted):
-            print ('i, f: ', i, f)
-            print (thrs_sorted[f])
+#            print ('i, f: ', i, f)
+#            print (thrs_sorted[f])
             frmean[i] = np.nanmean(thrs_sorted[f])
             frstd[i] = np.nanstd(thrs_sorted[f])
         ax.errorbar(np.array(thrs_sorted.keys())/1000., frmean, yerr=frstd, fmt='o')
         ax.set_xlim(1.8, 65.)
         xt = [2., 4., 8., 16., 32., 64.]
         mpl.xticks(xt, [str(x) for x in xt])
+        return(thrs_sorted, frmean, frstd)
 
     def adjustSelection(self, select, tone=False):
         freqs = []
@@ -978,7 +979,15 @@ if __name__ == '__main__':
                 P.getToneData(select=tonesel[k]) 
                 P.plotTones(select=tonesel[k], pdf=pdf)
                 allthrs[dirs[k]] = P.thrs
-        P.plotToneThresholds(allthrs, num='Tone Thresholds')
+        population_thrdata = P.plotToneThresholds(allthrs, num='Tone Thresholds')
+        print (population_thrdata)
+        print('Hz\tmean\tstd\t individual')
+        for i, f in enumerate(population_thrdata[0].keys()):
+            print('{0:.1f}\t{1:.1f}\t{2:.1f}'.format(f, population_thrdata[1][i], population_thrdata[2][i]), end='')
+            for j in range(len(population_thrdata[0][f])):
+                print('\t{0:.1f}'.format(population_thrdata[0][f][j]), end='')
+            print('')
+        
         tthr_filename = os.path.join(top_directory, 'ToneThresholds.pdf')
         mpl.savefig(tthr_filename)
     mpl.show()
