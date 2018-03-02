@@ -31,6 +31,7 @@ ABR_Datasets = { 'NrCAMKO': {'dir': "Tessa/Coate-NrCAM-ABRs/KO",
                                         'term': '\r', 'minlat': 2.2},
                  'TessaCBA': {'dir': 'Tessa/CBA', 'term': '\r', 'minlat': 2.2, 'invert': False},
                  'TessaCBANE': {'dir': 'Tessa/CBA_NoiseExposed', 'term': '\r', 'minlat': 2.2, 'invert': True},
+                 'TessaNF107': {'dir': 'Tessa/NF107', 'term': '\r', 'minlat': 2.2, 'invert': True},
                  'CNTNAP2X': {'dir': 'Tessa/CNTNAP2', 'term': '\r', 'minlat': 2.2, 'invert': True},
                  'CNTNAP2Het': {'dir': 'Tessa/CNTNAP2_Het', 'term': '\r', 'minlat': 2.2, 'invert': True},
                  'CNTNAP2HG': {'dir': 'Tessa/CNTNAP2_Het_GP4.3', 'term': '\r', 'minlat': 2.2, 'invert': True},
@@ -50,5 +51,6 @@ ABR_Datasets = { 'NrCAMKO': {'dir': "Tessa/Coate-NrCAM-ABRs/KO",
                      'invert': True, 'nameselect': 'CBA',
                      'term':'\n', 'minlat': 0.6},
                  'Eveleen': {'dir': "Eveleen\'s ABRs", 'term': '\r', 'minlat': 2.2, 'invert': False},
-                 'Amber': {'dir': "Amber_ABR_data", 'term': '\r', 'minlat': 2.2, 'invert': True}
+                 'Amber': {'dir': "Amber_ABR_data", 'term': '\r', 'minlat': 2.2, 'invert': True},
+                 'Christiann': {'dir': 'Christiann_ABR_data', 'term':'\r','minlat':2.2,'invert':False}
                  }

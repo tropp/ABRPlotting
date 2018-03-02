@@ -31,7 +31,8 @@ class ABR():
     datapath : str
         Path to the datasets. The data sets are expected to be collected under this
         path into individual directories, each with the results of the ABR runs for
-        one subject.
+        one subject. (this should be the information from the directory in ABR_Datasets.py and contains the information listed below as "info : dict")
+        The path for the data is specified in the getcomputer.py file.
     mode : string ('clicks' or 'tones')
         Specify type of data in the data set
     info : dict
